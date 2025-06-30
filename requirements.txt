@@ -1,0 +1,7 @@
+asyncio
+websockets
+pandas
+ta
+ccxt
+python-telegram-bot==13.*
+matplotlib
