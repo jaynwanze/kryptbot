@@ -5,3 +5,5 @@ ta
 ccxt
 python-telegram-bot==13.*
 matplotlib
+dotenv
+numpy
