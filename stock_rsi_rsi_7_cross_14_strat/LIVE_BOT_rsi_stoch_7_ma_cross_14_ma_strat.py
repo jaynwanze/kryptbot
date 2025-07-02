@@ -23,7 +23,7 @@ INTERVAL        = "15"               # stream interval, string
 LOOKBACK_BARS   = 800                # kept in memory (≈ 8 days)
 
 # Strategy param
-RISK_PCT        = 0.02               # not used (alerts only)
+# RISK_PCT        = 0.02               # not used (alerts only)
 ATR_MULT_SL     = 2.0
 ATR_MULT_TP     = 4.0                # RR 2:1
 WICK_BUFFER     = 0.25               # extra ATR cushion
@@ -65,6 +65,7 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     gain         = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
     loss         = (-delta.clip(upper=0)).ewm(alpha=1/14, adjust=False).mean()
     rsi          = 100 - 100/(1+gain/loss)
+    df["rsi"] = rsi                       # <‑‑ stored for signal logic
     rsi_min      = rsi.rolling(14).min();   rsi_max = rsi.rolling(14).max()
     df["k_fast"] = ((rsi - rsi_min)/(rsi_max - rsi_min)).rolling(3).mean()*100
 
@@ -90,11 +91,17 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def h1_trend(df_15: pd.DataFrame) -> Tuple[bool, float]:
-    """Return (is_uptrend, ema50_slope) from the *latest* 1‑hour data."""
-    h1 = df_15.c.resample("1H").last().ffill()
+    """Return (is_uptrend, ema50_slope) using aggregated 1‑hour closes."""
+    h1 = (
+        df_15["c"]          
+        .resample("1H")
+        .last()
+        .to_frame("close")
+        .ffill()
+    )
     h1["ema50"] = h1.close.ewm(span=50).mean()
     h1["slope"] = h1.ema50.diff(3)
-    last        = h1.iloc[-1]
+    last = h1.iloc[-1]
     return last.close > last.ema50, last.slope
 
 
@@ -116,6 +123,33 @@ def short_signal(bar, prev, trend_ok, slope_ok) -> bool:
 # ────────────────────────────────────────────────────────────────
 #  Telegram alert
 # ────────────────────────────────────────────────────────────────
+
+# def test_alert_side(bar, side: str):
+#     """Test function to send a nicely formatted Telegram alert."""
+#     stop_off = (ATR_MULT_SL * 1.6 + WICK_BUFFER) * bar.atr
+#     if side == "LONG":
+#         sl = bar.c - stop_off
+#         tp = bar.c + ATR_MULT_TP * bar.atr
+#         emoji = "📈"
+#     else:  # SHORT
+#         sl = bar.c + stop_off
+#         tp = bar.c - ATR_MULT_TP * bar.atr
+#         emoji = "📉"
+
+#     msg = (
+#         f"{emoji} *{PAIR} {INTERVAL}‑m {side} signal*\n"
+#         f"`{bar.name:%Y‑%m‑%d %H:%M}` UTC\n"
+#         f"Entry  : `{bar.c:.3f}`\n"
+#         f"Stop   : `{sl:.3f}`\n"
+#         f"Target : `{tp:.3f}`\n"
+#         f"ADX    : `{bar.adx:.1f}`\n"
+#         f"StochK : `{bar.k_fast:.1f}`"
+#     )
+#     try:
+#         bot.send_message(chat_id=TG_CHAT_ID, text=msg, parse_mode="Markdown")
+#         logging.info("Telegram alert sent: %s %s", side, bar.name)
+#     except Exception as exc:
+#         logging.error("Telegram error: %s", exc)
 
 def alert_side(bar, side: str):
     """Send a nicely formatted Telegram alert."""
@@ -198,11 +232,14 @@ async def kline_stream():
                     hist = pd.concat([hist, new]).tail(LOOKBACK_BARS)
                     hist = compute_indicators(hist)
 
-                    if len(hist) < 50:   # need warm‑up for EMAs/ATR
+                    if len(hist) < 60:   # need warm‑up for EMAs/ATR
                         continue
 
                     bar  = hist.iloc[-1]
                     prev = hist.iloc[-2]
+
+                    if any(pd.isna(v) for v in (bar.adx, bar.k_fast, bar.atr)):
+                        continue
 
                     trend_up, slope = h1_trend(hist)
 
