@@ -7,6 +7,9 @@ import pandas as pd
 import websockets
 from   telegram import Bot
 from   dotenv   import load_dotenv
+import traceback
+
+
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s – %(levelname)s – %(message)s")
@@ -176,7 +179,13 @@ async def kline_stream():
                     if not k["confirm"]:   # skip live/unclosed candles
                         continue
 
-                    ts  = datetime.fromtimestamp(k["end"], tz=timezone.utc)
+                    end_ts = k.get("end")
+                    if not isinstance(end_ts, (int, float)) or end_ts < 0:
+                        logging.error("Invalid k['end']: %r", end_ts)
+                        continue
+                    if end_ts > 1e12:  # convert ms to s if needed
+                        end_ts = end_ts / 1000
+                    ts = datetime.fromtimestamp(end_ts, tz=timezone.utc)
                     new = pd.DataFrame([[ts,
                                          float(k["open"]),
                                          float(k["high"]),
@@ -203,8 +212,8 @@ async def kline_stream():
                         alert_side(bar, "SHORT")
 
         except Exception as exc:
-            logging.error("WS error: %s – reconnecting in 5 s", exc)
-            await asyncio.sleep(5)
+              logging.error("WS error: %s\n%s", exc, traceback.format_exc())
+              await asyncio.sleep(5)
 
 # ────────────────────────────────────────────────────────────────
 #  Entry point
