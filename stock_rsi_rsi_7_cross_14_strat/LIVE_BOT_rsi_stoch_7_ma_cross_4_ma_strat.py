@@ -1,6 +1,7 @@
 import os, json, asyncio, math, logging, time
 from   datetime import datetime, timezone
 
+from typing import Tuple
 import numpy  as np
 import pandas as pd
 import websockets
@@ -85,7 +86,7 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
 # ────────────────────────────────────────────────────────────────
 
 
-def h1_trend(df_15: pd.DataFrame) -> tuple[bool, float]:
+def h1_trend(df_15: pd.DataFrame) -> Tuple[bool, float]:
     """Return (is_uptrend, ema50_slope) from the *latest* 1‑hour data."""
     h1 = df_15.c.resample("1H").last().ffill()
     h1["ema50"] = h1.close.ewm(span=50).mean()
@@ -147,6 +148,8 @@ def alert_side(bar, side: str):
 
 async def kline_stream():
     hist = pd.DataFrame()   # stores last LOOKBACK_BARS 15‑m bars
+    last_heartbeat = time.time()
+    HEARTBEAT_INTERVAL = 600  # seconds (10 minutes)
 
     while True:   # auto‑reconnect
         try:
@@ -155,6 +158,16 @@ async def kline_stream():
                 logging.info("Subscribed to %s", TOPIC)
 
                 async for raw in ws:
+                        # Heartbeat: log or send Telegram message every 10 minutes
+                    now = time.time()
+                    if now - last_heartbeat > HEARTBEAT_INTERVAL:
+                        logging.info("Heartbeat: bot is alive at %s", datetime.now(timezone.utc))
+                        # Optional: send Telegram heartbeat
+                        # try:
+                        #     bot.send_message(chat_id=TG_CHAT_ID, text="❤️ Bot heartbeat: alive at {}".format(datetime.datetime.now(datetime.timezone.utc)), parse_mode="Markdown")
+                        # except Exception as exc:
+                        #     logging.error("Telegram heartbeat error: %s", exc)
+                        last_heartbeat = now
                     msg = json.loads(raw)
                     if msg.get("topic") != TOPIC:
                         continue
