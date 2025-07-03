@@ -219,7 +219,7 @@ def alert_side(bar, side: str):
 # ────────────────────────────────────────────────────────────────
 
 async def kline_stream():
-    hist = await preload_history()        # ❶  pre-load ~1000 bars
+    hist = await preload_history(1000)        # ❶  pre-load ~1000 bars
     logging.info("History pre-loaded: %d bars (from %s to %s)",
                  len(hist), hist.index[0], hist.index[-1])
     last_heartbeat = time.time()
