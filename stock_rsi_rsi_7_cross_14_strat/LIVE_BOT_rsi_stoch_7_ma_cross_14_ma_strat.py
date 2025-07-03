@@ -44,30 +44,37 @@ TOPIC      = f"kline.{INTERVAL}.{PAIR}"
 PING_SEC   = 20
 
 
-async def preload_history(limit: int = 1000) -> pd.DataFrame:
+async def preload_history(limit: int = 18000) -> pd.DataFrame:
     """
-    Fetch *limit* most-recent 15-m candles from Bybit REST and return a
-    DataFrame with indicators already computed.
+    Fetch up to *limit* most-recent 15-m candles from Bybit REST and return a DataFrame.
     """
     url = "https://api.bybit.com/v5/market/kline"
     params = {
         "category": "linear",
         "symbol":   PAIR,
-        "interval": INTERVAL,   # "15"
-        "limit":    limit       # max = 1000  (≈ 10.4 days)
+        "interval": INTERVAL,
+        "limit":    1000
     }
-    r = requests.get(url, params=params, timeout=10).json()
-
+    all_rows = []
+    last_ts = None
+    while len(all_rows) < limit:
+        if last_ts:
+            params["end"] = last_ts
+        r = requests.get(url, params=params, timeout=10).json()
+        rows = r["result"]["list"]
+        if not rows:
+            break
+        all_rows.extend(rows)
+        last_ts = int(rows[-1][0]) - 1  # go backwards
+        if len(rows) < 1000:
+            break
     # Bybit REST returns newest-first; reverse so earliest comes first
-    rows = reversed(r["result"]["list"])
-
-    df = (pd.DataFrame(
-            [[float(o), float(h), float(l), float(c), float(v), int(t)]   # o/h/l/c/v/ts
-             for t, o, h, l, c, v, *_ in rows],
-            columns=["o", "h", "l", "c", "v", "ts"])
-            .assign(ts=lambda d: pd.to_datetime(d.ts, unit="ms", utc=True))
-            .set_index("ts"))
-
+    all_rows = list(reversed(all_rows))
+    df = pd.DataFrame(
+        [[float(o), float(h), float(l), float(c), float(v), int(t)]
+         for t, o, h, l, c, v, *_ in all_rows],
+        columns=["o", "h", "l", "c", "v", "ts"]
+    ).assign(ts=lambda d: pd.to_datetime(d.ts, unit="ms", utc=True)).set_index("ts")
     return compute_indicators(df)
 
 # ────────────────────────────────────────────────────────────────
@@ -288,60 +295,50 @@ async def kline_stream():
 #  Entry point
 # ────────────────────────────────────────────────────────────────
 
-# def backtest(hist: pd.DataFrame,
-#              look_ahead: int = 20) -> None:
-#     """Run very naïve, bar-only back-test and print a summary."""
-#     # --- clear per-run state so globals don’t bleed between tests
-#     global last_cross_up_ts, last_cross_dn_ts
-#     last_cross_up_ts = last_cross_dn_ts = None
+# # ───────── lightweight back-test ──────────
+# def backtest(df: pd.DataFrame, look_ahead=20):
+#     entries, results = 0, {"TP":0, "SL":0, "NONE":0}
+#     for i in range(1, len(df)):
+#         b, p = df.iloc[i], df.iloc[i-1]
+#         if b[["adx","k_fast","atr"]].isna().any():        # warm-up
+#             continue
+#         trend_up, slope = h1_trend(df.iloc[:i+1])
 
-#     signals, trades = [], []
+#         side = None
+#         if long_signal(b, p, trend_up, slope):   side = "LONG"
+#         if short_signal(b, p, trend_up, slope):  side = "SHORT"
+#         if side is None: continue
 
-#     # 1) GENERATE ENTRY SIGNALS ────────────────────────────────
-#     for i in range(1, len(hist)):
-#         bar, prev = hist.iloc[i], hist.iloc[i-1]
-
-#         # ─ track latest EMA crosses
-#         if bar.ema7 > bar.ema14 and prev.ema7 <= prev.ema14:
-#             last_cross_up_ts = bar.name
-#         elif bar.ema7 < bar.ema14 and prev.ema7 >= prev.ema14:
-#             last_cross_dn_ts = bar.name
-
-#         if bar[["adx", "k_fast", "atr"]].isna().any():
-#             continue          # indicators not ready yet
-
-#         trend_up, slope = h1_trend(hist.iloc[:i+1])
-
-#         if long_signal(bar, trend_up, slope):
-#             signals.append(("LONG",  bar.name, bar.c, bar.atr))
-#         elif short_signal(bar, trend_up, slope):
-#             signals.append(("SHORT", bar.name, bar.c, bar.atr))
-
-#     # 2) WALK FORWARD TO EXIT OR EXPIRE ─────────────────────────
-#     for side, ts, entry, atr in signals:
-#         off = (ATR_MULT_SL*1.6 + WICK_BUFFER)*atr
-#         sl  = entry - off if side == "LONG" else entry + off
-#         tp  = entry + ATR_MULT_TP*atr if side == "LONG" else entry - ATR_MULT_TP*atr
+#         entries += 1
+#         atr_off = (ATR_MULT_SL*1.6 + WICK_BUFFER)*b.atr
+#         sl = b.c - atr_off if side=="LONG" else b.c + atr_off
+#         tp = b.c + ATR_MULT_TP*b.atr if side=="LONG" else b.c - ATR_MULT_TP*b.atr
 
 #         decided = "NONE"
-#         for _, row in hist.loc[ts:].iloc[1:look_ahead+1].iterrows():
-#             if side == "LONG":
-#                 if row.l <= sl: decided = "SL"; break
-#                 if row.h >= tp: decided = "TP"; break
-#             else:
-#                 if row.h >= sl: decided = "SL"; break
-#                 if row.l <= tp: decided = "TP"; break
+#         for _, row in df.iloc[i+1 : i+1+look_ahead].iterrows():
+#             if side == "LONG" and row.l <= sl:
+#                 decided = "SL"
+#                 print(f"🔴LONG Trade {b.name:%Y-%m-%d %H:%M} {side} SL at {sl:.3f} vs {row.l:.3f} entry {b.c:.3f} TP {tp:.3f}")
+#                 break
+#             if side == "SHORT" and row.h >= sl:
+#                 decided = "SL"
+#                 print(f"🔴SHORT Trade {b.name:%Y-%m-%d %H:%M} {side} SL at {sl:.3f} vs {row.h:.3f} entry {b.c:.3f} TP {tp:.3f}")
+#                 break
+#             if side == "LONG" and row.h >= tp:
+#                 decided = "TP"
+#                 print(f"🟢Long Trade {b.name:%Y-%m-%d %H:%M} {side} TP at {tp:.3f} vs {row.h:.3f} entry {b.c:.3f} SL {sl:.3f}")
+#                 break
+#             if side == "SHORT" and row.l <= tp:
+#                 decided = "TP"
+#                 print(f"🟢SHORT Trade {b.name:%Y-%m-%d %H:%M} {side} TP at {tp:.3f} vs {row.l:.3f} entry {b.c:.3f} SL {sl:.3f}")
+#                 break
+#         results[decided] += 1
 
-#         trades.append(decided)
-
-#     win  = trades.count("TP")
-#     loss = trades.count("SL")
-#     pend = trades.count("NONE")
-#     tot  = len(trades)
-
-#     print(f"Back-test over {(hist.index[-1]-hist.index[0]).days}d "
-#       f"• entries {tot}  |  win {win}  loss {loss}  "
-#       f"pending {pend}  |  win-rate {win/(win+loss):.1%}")
+#     wins, losses, pend = results["TP"], results["SL"], results["NONE"]
+#     wr = wins / (wins + losses) if (wins + losses) else 0
+#     print(f"Back-test {df.index[0]:%Y-%m-%d} → {df.index[-1]:%Y-%m-%d}"
+#           f"  |  entries {entries}  •  win {wins}  loss {losses}"
+#           f"  pending {pend}  •  win-rate {wr:.1%}")
 
 # ───────────────────────────────── entrypoint ────────────────────────────────
 if __name__ == "__main__":
