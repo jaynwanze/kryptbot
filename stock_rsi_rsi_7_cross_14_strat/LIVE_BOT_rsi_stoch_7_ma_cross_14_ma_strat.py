@@ -346,7 +346,7 @@ async def kline_stream():
 # ───────────────────────────────── entrypoint ────────────────────────────────
 if __name__ == "__main__":
     logging.info("SOL/USDT 15-m signal bot starting %s", datetime.utcnow())
-    # asyncio.run(kline_stream())
+    asyncio.run(kline_stream())
     # hist = asyncio.run(preload_history(limit=3000))
     # hist_30d = hist[hist.index >= hist.index[-1] - pd.Timedelta(days=30)]
     # backtest(hist_30d)
