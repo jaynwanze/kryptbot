@@ -288,7 +288,65 @@ async def kline_stream():
 #  Entry point
 # ────────────────────────────────────────────────────────────────
 
+# def backtest(hist: pd.DataFrame,
+#              look_ahead: int = 20) -> None:
+#     """Run very naïve, bar-only back-test and print a summary."""
+#     # --- clear per-run state so globals don’t bleed between tests
+#     global last_cross_up_ts, last_cross_dn_ts
+#     last_cross_up_ts = last_cross_dn_ts = None
+
+#     signals, trades = [], []
+
+#     # 1) GENERATE ENTRY SIGNALS ────────────────────────────────
+#     for i in range(1, len(hist)):
+#         bar, prev = hist.iloc[i], hist.iloc[i-1]
+
+#         # ─ track latest EMA crosses
+#         if bar.ema7 > bar.ema14 and prev.ema7 <= prev.ema14:
+#             last_cross_up_ts = bar.name
+#         elif bar.ema7 < bar.ema14 and prev.ema7 >= prev.ema14:
+#             last_cross_dn_ts = bar.name
+
+#         if bar[["adx", "k_fast", "atr"]].isna().any():
+#             continue          # indicators not ready yet
+
+#         trend_up, slope = h1_trend(hist.iloc[:i+1])
+
+#         if long_signal(bar, trend_up, slope):
+#             signals.append(("LONG",  bar.name, bar.c, bar.atr))
+#         elif short_signal(bar, trend_up, slope):
+#             signals.append(("SHORT", bar.name, bar.c, bar.atr))
+
+#     # 2) WALK FORWARD TO EXIT OR EXPIRE ─────────────────────────
+#     for side, ts, entry, atr in signals:
+#         off = (ATR_MULT_SL*1.6 + WICK_BUFFER)*atr
+#         sl  = entry - off if side == "LONG" else entry + off
+#         tp  = entry + ATR_MULT_TP*atr if side == "LONG" else entry - ATR_MULT_TP*atr
+
+#         decided = "NONE"
+#         for _, row in hist.loc[ts:].iloc[1:look_ahead+1].iterrows():
+#             if side == "LONG":
+#                 if row.l <= sl: decided = "SL"; break
+#                 if row.h >= tp: decided = "TP"; break
+#             else:
+#                 if row.h >= sl: decided = "SL"; break
+#                 if row.l <= tp: decided = "TP"; break
+
+#         trades.append(decided)
+
+#     win  = trades.count("TP")
+#     loss = trades.count("SL")
+#     pend = trades.count("NONE")
+#     tot  = len(trades)
+
+#     print(f"Back-test over {(hist.index[-1]-hist.index[0]).days}d "
+#       f"• entries {tot}  |  win {win}  loss {loss}  "
+#       f"pending {pend}  |  win-rate {win/(win+loss):.1%}")
+
+# ───────────────────────────────── entrypoint ────────────────────────────────
 if __name__ == "__main__":
-    logging.info("SOL/USDT 15‑m signal bot starting – %s", datetime.now(timezone.utc))
-    logging.info("Telegram chat id  : %s", TG_CHAT_ID)
-    asyncio.run(kline_stream())
+    logging.info("SOL/USDT 15-m signal bot starting %s", datetime.utcnow())
+    # asyncio.run(kline_stream())
+    # hist = asyncio.run(preload_history(limit=3000))
+    # hist_30d = hist[hist.index >= hist.index[-1] - pd.Timedelta(days=30)]
+    # backtest(hist_30d)
