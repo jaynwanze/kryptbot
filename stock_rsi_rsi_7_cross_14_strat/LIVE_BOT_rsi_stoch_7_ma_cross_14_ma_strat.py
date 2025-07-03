@@ -8,6 +8,7 @@ import websockets
 from   telegram import Bot
 from   dotenv   import load_dotenv
 import traceback
+import requests 
 
 
 
@@ -41,6 +42,33 @@ bot        = Bot(token=TG_TOKEN)
 WS_URL     = "wss://stream.bybit.com/v5/public/linear"
 TOPIC      = f"kline.{INTERVAL}.{PAIR}"
 PING_SEC   = 20
+
+
+async def preload_history(limit: int = 1000) -> pd.DataFrame:
+    """
+    Fetch *limit* most-recent 15-m candles from Bybit REST and return a
+    DataFrame with indicators already computed.
+    """
+    url = "https://api.bybit.com/v5/market/kline"
+    params = {
+        "category": "linear",
+        "symbol":   PAIR,
+        "interval": INTERVAL,   # "15"
+        "limit":    limit       # max = 1000  (≈ 10.4 days)
+    }
+    r = requests.get(url, params=params, timeout=10).json()
+
+    # Bybit REST returns newest-first; reverse so earliest comes first
+    rows = reversed(r["result"]["list"])
+
+    df = (pd.DataFrame(
+            [[float(o), float(h), float(l), float(c), float(v), int(t)]   # o/h/l/c/v/ts
+             for t, o, h, l, c, v, *_ in rows],
+            columns=["o", "h", "l", "c", "v", "ts"])
+            .assign(ts=lambda d: pd.to_datetime(d.ts, unit="ms", utc=True))
+            .set_index("ts"))
+
+    return compute_indicators(df)
 
 # ────────────────────────────────────────────────────────────────
 #  Indicator helpers (vectorised over a DataFrame)
@@ -184,7 +212,9 @@ def alert_side(bar, side: str):
 # ────────────────────────────────────────────────────────────────
 
 async def kline_stream():
-    hist = pd.DataFrame()   # stores last LOOKBACK_BARS 15‑m bars
+    hist = await preload_history()        # ❶  pre-load ~1000 bars
+    logging.info("History pre-loaded: %d bars (from %s to %s)",
+                 len(hist), hist.index[0], hist.index[-1])
     last_heartbeat = time.time()
     HEARTBEAT_INTERVAL = 600  # seconds (10 minutes)
 
@@ -232,8 +262,8 @@ async def kline_stream():
                     hist = pd.concat([hist, new]).tail(LOOKBACK_BARS)
                     hist = compute_indicators(hist)
 
-                    if len(hist) < 60:   # need warm‑up for EMAs/ATR
-                        continue
+                    # if len(hist) < 60:   # need warm‑up for EMAs/ATR
+                    #     continue
 
                     bar  = hist.iloc[-1]
                     prev = hist.iloc[-2]
@@ -244,8 +274,10 @@ async def kline_stream():
                     trend_up, slope = h1_trend(hist)
 
                     if long_signal(bar, prev, trend_up, slope):
+                        logging.info("LONG reasons: k_fast %.1f rsi %.1f adx %.1f slope %.4f", bar.k_fast, bar.rsi, bar.adx, slope)
                         alert_side(bar, "LONG")
                     elif short_signal(bar, prev, trend_up, slope):
+                        logging.info("SHORT reasons: k_fast %.1f rsi %.1f adx %.1f slope %.4f", bar.k_fast, bar.rsi, bar.adx, slope)
                         alert_side(bar, "SHORT")
 
         except Exception as exc:
