@@ -18,4 +18,4 @@ RUN apt-get update && \
 # -------- code --------
 COPY stock_rsi_rsi_7_cross_14_strat/LIVE_BOT_rsi_stoch_7_ma_cross_14_ma_strat.py .
 
-CMD ["python", "LIVE_BOT_rsi_stoch_7_ma_cross_14_ma_strat.py"]
+CMD ["python", "-m", "stock_rsi_rsi_7_cross_14_strat.LIVE_BOT_rsi_stoch_7_ma_cross_14_ma_strat"]
