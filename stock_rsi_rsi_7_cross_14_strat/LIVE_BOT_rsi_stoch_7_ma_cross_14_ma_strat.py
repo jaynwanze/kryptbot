@@ -94,9 +94,13 @@ async def kline_stream():
                         continue
 
                     # -------------- build a new 15-m row --------------
-                    ts = datetime.fromtimestamp(
-                             k["end"]/1000 if k["end"] > 1e12 else k["end"],
-                             tz=timezone.utc)
+                    end_ts = k.get("end")
+                    if not isinstance(end_ts, (int, float)) or end_ts < 0:
+                        logging.error("Invalid k['end']: %r", end_ts)
+                        continue
+                    if end_ts > 1e12:  # convert ms to s if needed
+                        end_ts = end_ts / 1000
+                    ts = datetime.fromtimestamp(end_ts, tz=timezone.utc)
 
                     new = pd.DataFrame([[ts,
                                          float(k["open"]),
