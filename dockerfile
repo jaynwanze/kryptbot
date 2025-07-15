@@ -4,7 +4,7 @@ FROM python:3.8.10-slim
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1
 ENV TZ=UTC
-ENV PYTHONPATH="/app/stock_rsi_rsi_7_cross_14_strat:${PYTHONPATH}"
+ENV PYTHONPATH="/app/bot:${PYTHONPATH}"
 
 COPY requirements.txt .
 RUN apt-get update \
@@ -15,4 +15,4 @@ RUN apt-get update \
 
 COPY . /app
 
-CMD ["python", "-m", "stock_rsi_rsi_7_cross_14_strat.LIVE_BOT_rsi_stoch_7_ma_cross_14_ma_strat"]
+CMD ["python", "-m", "bot.LIVE_BOT_rsi_stoch_7_ma_cross_14_ma_strat"]
