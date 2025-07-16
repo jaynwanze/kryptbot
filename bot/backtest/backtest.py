@@ -43,8 +43,9 @@ from data import preload_history
 
 # ───────── lightweight back-test ──────────
 def backtest(df: pd.DataFrame,
-             equity0: float = 1_000,
-             risk_pct: float = config.RISK_PCT) -> None:
+             equity0: float = config.STAKE_SIZE_USD,
+             risk_pct: float = config.RISK_PCT,
+             ) -> None:
     """
     Replicates the notebook logic exactly:
     • same SL/TP math  (RR 2 : 1, no 20-bar cut-off)
@@ -105,14 +106,14 @@ def backtest(df: pd.DataFrame,
                 stop = config.ATR_MULT_SL*bar.atr *1.6
                 pos  = dict(dir=1, entry=bar.c,
                         sl=bar.c-stop - config.WICK_BUFFER * bar.atr, tp=bar.c+config.ATR_MULT_TP*bar.atr,
-                        risk=equity*risk_pct, half=False, time_entry=idx, time_close=None)
+                        risk=equity0*risk_pct, half=False, time_entry=idx, time_close=None)
 
             elif tjr_short_signal(df, i, htf_row):
                 print(i)
                 stop = config.ATR_MULT_SL*bar.atr *1.6
                 pos  = dict(dir=-1, entry=bar.c,
                         sl=bar.c+stop + config.WICK_BUFFER * bar.atr, tp=bar.c-config.ATR_MULT_TP*bar.atr,
-                        risk=equity*risk_pct, half=False,time_entry=idx, time_close=None)
+                        risk=equity0*risk_pct, half=False,time_entry=idx, time_close=None)
 
         curve.append(equity)
 

@@ -7,9 +7,12 @@ INTERVAL        = "15"               # stream interval, string
 LOOKBACK_BARS   = 800                # kept in memory (≈ 8 days)
 
 # Strategy param
-RISK_PCT        = 0.02               # not used (alerts only)
+RISK_PCT        = 0.2               # not used (alerts only)
 # ATR_MULT_SL     = 1.5
 # ATR_MULT_TP     = 3           # RR 2:1
+# config.py  (or wherever you keep constants)
+STAKE_SIZE_USD   = 1_000          # ‘cash you allocate’ per entry
+LEVERAGE         = 25
 ATR_MULT_SL     = 1       
 ATR_MULT_TP     = 2     # RR 2:1
 WICK_BUFFER     = 0.25               # extra ATR cushion
