@@ -7,7 +7,7 @@ import logging
 from datetime import datetime
 import pandas as pd
 import sys
-from helpers import config, update_h1, h1_row, long_signal, short_signal, build_h1
+from helpers import config, is_bos, has_fvg,fib_tag,build_htf_levels, tjr_long_signal, tjr_short_signal
 from data import preload_history
 
 # ────────────────────────────────────────────────────────────────
@@ -54,7 +54,7 @@ def backtest(df: pd.DataFrame,
     • prints every trade + summary and returns nothing
     """
     # ------------- build tf with hisotry data -------------------
-    h1   = build_h1(df)
+    htf_levels   = build_htf_levels(df)
 
     # ------------- back-test loop ------------------------------------
     equity   = equity0
@@ -66,8 +66,8 @@ def backtest(df: pd.DataFrame,
 
     for i,(idx, bar) in enumerate(df.iterrows()):
         bar, prev = df.iloc[i], df.iloc[i-1] if i > 0 else df.iloc[i]
-        h1 = update_h1(h1, idx, bar.c)
-        h1r  = h1_row(h1, idx)
+        htf_row = htf_levels.loc[idx]
+
         # if bar[["atr", "adx", "k_fast"]].isna().any():
         #     curve.append(equity); continue     # still warming up
 
@@ -100,13 +100,15 @@ def backtest(df: pd.DataFrame,
         # ---- look for new entry  -----------------------------------
         # Optional condition to add - and bar.name.hour in good_hours
         if pos is None :
-            if long_signal(bar, prev, h1r):
+            if tjr_long_signal(df, i, htf_row):
+                print(i)
                 stop = config.ATR_MULT_SL*bar.atr *1.6
                 pos  = dict(dir=1, entry=bar.c,
                         sl=bar.c-stop - config.WICK_BUFFER * bar.atr, tp=bar.c+config.ATR_MULT_TP*bar.atr,
                         risk=equity*risk_pct, half=False, time_entry=idx, time_close=None)
- 
-            elif short_signal(bar, prev, h1r):
+
+            elif tjr_short_signal(df, i, htf_row):
+                print(i)
                 stop = config.ATR_MULT_SL*bar.atr *1.6
                 pos  = dict(dir=-1, entry=bar.c,
                         sl=bar.c+stop + config.WICK_BUFFER * bar.atr, tp=bar.c-config.ATR_MULT_TP*bar.atr,
@@ -117,17 +119,39 @@ def backtest(df: pd.DataFrame,
     # ------------- final statistics ---------------------------------
     wins  = sum(1 for t in trades if t["pnl"] > 0)
     losses= sum(1 for t in trades if t["pnl"] < 0)
-    print(f"Back-test {df.index[0]:%Y-%m-%d} → {df.index[-1]:%Y-%m-%d}  "
-          f"entries {len(trades)}  |  wins {wins}  losses {losses}  "
-          f"win-rate {wins/(wins+losses):.1%}  |  final ${equity:,.0f}")
-
+    # print(f"Back-test {df.index[0]:%Y-%m-%d} → {df.index[-1]:%Y-%m-%d}  "
+    #       f"entries {len(trades)}  |  wins {wins}  losses {losses}  "
+    #       f"win-rate {wins/(wins+losses):.1%}  |  final ${equity:,.0f}")
+       # ---------- final statistics ----------
+    wins   = sum(1 for t in trades if t["pnl"] > 0)
+    losses = sum(1 for t in trades if t["pnl"] < 0)
+    total  = wins + losses
+    pf     = (sum(t["pnl"] for t in trades if t["pnl"] > 0) /
+              abs(sum(t["pnl"] for t in trades if t["pnl"] < 0) or 1))
+    
+    print(f"... entries {len(trades)} | wins {wins} losses {losses} "
+      f"win-rate {wins/total:.1%}" if total else "win-rate n/a",
+      f"| final ${equity:,.0f} | R.R {config.ATR_MULT_TP}:{config.ATR_MULT_SL} | ")
+    
     # optional: equity curve
     pd.Series(curve, index=df.index[-len(curve):]).plot(grid=True, figsize=(10,3))
+
+    summary = dict(
+        name          = "TJR-raid",      # or "Live-bot"
+        trades        = len(trades),
+        wins          = wins,
+        losses        = losses,
+        win_rate      = wins / total if total else 0,
+        profit_factor = pf,
+        equity_final  = equity,
+    )
+    return summary                   #  ←  **important**
+
 
 
 # ───────────────────────────────── entrypoint ────────────────────────────────
 if __name__ == "__main__":
-    logging.info("SOL/USDT 15-m Backtest Starting %s", datetime.utcnow())
+    logging.info("SOL/USDT TJR Strategy Backtest Starting %s", datetime.utcnow())
     hist = asyncio.run(preload_history(limit=3000))
     hist_30d = hist[hist.index >= hist.index[-1] - pd.Timedelta(days=30)]
     backtest(hist_30d)   # pass accessor
