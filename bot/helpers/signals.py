@@ -1,3 +1,4 @@
+from typing import Tuple
 from helpers.config import STO_K_MIN_LONG, STO_K_MIN_SHORT, ADX_FLOOR
 
 def long_signal(bar, prev, h1r):
@@ -13,7 +14,7 @@ def short_signal(bar, prev, h1r):
             and h1r.close < h1r.ema50 and h1r.slope < 0)
 from helpers import htf, ltf, config
 
-def raid_happened(bar, htf_row) -> tuple[bool, str]:
+def raid_happened(bar, htf_row) -> Tuple[bool, str]:
     """
     True + 'long'  if bar just swept a *low* liquidity pool,
     True + 'short' if bar just swept a *high* liquidity pool.
