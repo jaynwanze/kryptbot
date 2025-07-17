@@ -1,5 +1,7 @@
 import pandas as pd
 import helpers.config as config
+HTF_WINDOW = f"{config.HTF_DAYS}D"          # e.g. '15D'
+
 
 
 def update_h1(h1: pd.DataFrame, ts, close: float) -> pd.DataFrame:
@@ -59,3 +61,9 @@ def build_htf_levels(df15: pd.DataFrame) -> pd.DataFrame:
         out = out.join(hi).join(lo)
 
     return out.ffill()
+
+
+def update_htf_levels(df15: pd.DataFrame) -> pd.DataFrame:
+    # use only the last X days to compute D / H4 / session extrema
+    recent = df15.last(HTF_WINDOW)
+    return build_htf_levels(recent)

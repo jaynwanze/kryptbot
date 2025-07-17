@@ -41,7 +41,7 @@ def tjr_long_signal(df, i, htf_row) -> bool:
     checks = 0
     checks += ltf.is_bos(df, i, "long")
     checks += ltf.has_fvg(prev, bar)
-    checks += ltf.fib_tag(bar.l, df.h.iloc[i+1] if i+1 < len(df) else bar.h, "long")
+    checks += ltf.fib_tag(bar.l, bar, "long")
     return checks >= 1  # need at least two confirmations
 
 def tjr_short_signal(df, i, htf_row) -> bool:
@@ -52,5 +52,5 @@ def tjr_short_signal(df, i, htf_row) -> bool:
     checks = 0
     checks += ltf.is_bos(df, i, "short")
     checks += ltf.has_fvg(prev, bar)
-    checks += ltf.fib_tag(bar.h, df.l.iloc[i+1] if i+1 < len(df) else bar.l, "short")
+    checks += ltf.fib_tag(bar.h, bar, "short")
     return checks >= 1

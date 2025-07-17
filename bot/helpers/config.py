@@ -7,7 +7,7 @@ INTERVAL        = "15"               # stream interval, string
 LOOKBACK_BARS   = 800                # kept in memory (≈ 8 days)
 
 # Strategy param
-RISK_PCT        = 0.2               # not used (alerts only)
+RISK_PCT        = 0.20               # not used (alerts only)
 # ATR_MULT_SL     = 1.5
 # ATR_MULT_TP     = 3           # RR 2:1
 # config.py  (or wherever you keep constants)
@@ -28,6 +28,6 @@ SESSION_WINDOWS   = {         # UTC sessions
 }
 
 ###  LTF confirmation
-BOS_LOOKBACK = 10      # was 20
+BOS_LOOKBACK = 10     # was 20
 FVG_MIN_PX   = 0.0003  # was 0.0005
 FIB_EXT      = 0.79      # 79 % retrace / extension

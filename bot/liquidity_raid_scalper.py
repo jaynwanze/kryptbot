@@ -6,16 +6,17 @@ import os, json, asyncio, math, logging, time, traceback
 from   datetime import datetime, timezone
 from   typing   import Optional, Tuple
 
+import ccxt.async_support as ccxt
 import numpy  as np
 import pandas as pd
 import websockets
 from   telegram import Bot
 from   dotenv   import load_dotenv
-
+ 
 from helpers import (
     config,
     compute_indicators,        # → ATR, ADX, Stoch, RSI, …
-    build_h1, update_h1, h1_row,     # quick bias filters
+    update_htf_levels,          # 4‑hour / daily structure map
     build_htf_levels,          # 4‑hour / daily structure map
     tjr_long_signal,           # entry rules
     tjr_short_signal,          
@@ -35,6 +36,7 @@ load_dotenv()
 TG_TOKEN   = os.getenv("TELE_TOKEN")
 TG_CHAT_ID = int(os.getenv("TG_CHAT_ID"))
 bot        = Bot(token=TG_TOKEN)
+LOOKAHEAD = config.BOS_LOOKBACK          # look-ahead for BOS
 
 # ────────────────────────────────────────────────────────────────
 #  Bybit Web‑socket constants
@@ -42,6 +44,10 @@ bot        = Bot(token=TG_TOKEN)
 WS_URL   = "wss://stream.bybit.com/v5/public/linear"
 TOPIC    = f"kline.{config.INTERVAL}.{config.PAIR}"   # e.g. kline.15.SOLUSDT
 PING_SEC = 20
+REST     = ccxt.bybit({"enableRateLimit": True})
+TF_SEC   = int(config.INTERVAL) * 60          # 900 s for 15‑m
+MAX_RETRY = 3
+
 
 
 def alert_side(bar: pd.Series, side: str) -> None:
@@ -84,11 +90,18 @@ async def kline_stream() -> None:
                  len(hist), hist.index[0], hist.index[-1])
 
     last_heartbeat, HEARTBEAT_SECS = time.time(), 600  # log every 10 min
+    
+    # Indicator warm‑up
+    MAX_PERIODS = 200  # longest MA / oscillator period + cushion
 
-    while True:        # auto‑reconnect loop
+    # Pointer to detect WS gaps
+    last_ts: int | None = None
+
+    while True:  # auto‑reconnect loop
+        await asyncio.sleep(1)      
         try:
             async with websockets.connect(
-                WS_URL, ping_interval=PING_SEC
+                WS_URL, ping_interval=PING_SEC, ping_timeout=PING_SEC*2
             ) as ws:
                 await ws.send(json.dumps({"op": "subscribe", "args": [TOPIC]}))
                 logging.info("Subscribed to topic %s", TOPIC)
@@ -107,14 +120,33 @@ async def kline_stream() -> None:
                     if not kline["confirm"]:        # ignore still‑open candle
                         continue
 
-                    # 2) Add the freshly closed 15‑min bar to `hist`
-                    end_ts = kline.get("end")
-                    if not isinstance(end_ts, (int, float)) or end_ts < 0:
-                        logging.error("Invalid k['end']: %r", end_ts)
-                        continue
-                    if end_ts > 1e12:  # convert ms to s if needed
-                        end_ts = end_ts / 1000
-                    ts = datetime.fromtimestamp(end_ts, tz=timezone.utc)
+                      # --- watchdog: fill missed candles --------------------------------
+                    current_end = int(kline["end"]) // 1000  # to seconds
+                    if last_ts is None:
+                        last_ts = current_end - TF_SEC
+                    expected = last_ts + TF_SEC
+                    if current_end > expected:
+                        missing = list(range(expected, current_end, TF_SEC))
+                        logging.warning("WS gap: %d candle(s) missed – back‑filling", len(missing))
+                        since = (missing[0] - TF_SEC) * 1000  # ms
+                        for _ in range(MAX_RETRY):
+                            try:
+                                kl = await REST.fetch_ohlcv(config.PAIR, timeframe=config.INTERVAL + 'm', since=since, limit=len(missing)+2)
+                                df_miss = (pd.DataFrame(kl, columns=["ts","o","h","l","c","v"])\
+                                               .set_index("ts"))
+                                df_miss.index = pd.to_datetime(df_miss.index, unit='ms', utc=True)
+                                hist = (pd.concat([hist, df_miss])
+                                          .drop_duplicates()
+                                          .sort_index()
+                                          .tail(config.LOOKBACK_BARS))
+                                break
+                            except Exception as e:
+                                logging.error("REST back‑fill error: %s", e)
+                                await asyncio.sleep(0.5)
+                    last_ts = current_end  # move pointer
+
+                  
+                    ts = datetime.fromtimestamp(current_end, tz=timezone.utc)
                     new  = pd.DataFrame([[ts,
                                          float(kline["open"]),
                                          float(kline["high"]),
@@ -126,31 +158,33 @@ async def kline_stream() -> None:
                     hist = pd.concat([hist, new]).tail(config.LOOKBACK_BARS)
                     hist = compute_indicators(hist)
 
-                    # (re)build HTF table – cheap for ≤ 1 000 rows, but
-                    # TO:DO optimise by only refreshing at H4 closes
-                    htf_levels = build_htf_levels(hist)
+                    if len(hist) >= MAX_PERIODS:
+                        logging.info("Warm‑up already satisfied – live trading ENABLED")
 
-                    bar  = hist.iloc[-1]
-                    prev = hist.iloc[-2]
-                    htf_row = htf_levels.loc[bar.name]
-
+                    bar = hist.iloc[-1]
                     if bar[["atr","adx","k_fast"]].isna().any():
-                        continue      # indicators still warming up
+                        continue  # indicator NA guard
+                  # higher‑TF context
+                    try:
+                        htf_levels = update_htf_levels(hist)
+                        htf_row    = htf_levels.loc[bar.name]
+                    except KeyError:
+                            continue      
 
-                    # 3) Signals
+                    # Signals
                     i = len(hist) - 1
                     if tjr_long_signal(hist, i, htf_row):
-                        logging.info("LONG – k_fast %.1f  adx %.1f  fvg_up %s  bos_up %s",
-                                     bar.k_fast, bar.adx,
-                                     htf_row.fvg_up, htf_row.bos_up)
+                        logging.info("Long‑signal %s  k_fast %.1f  adx %.1f",
+                                     bar.name, bar.k_fast, bar.adx)
                         alert_side(bar, "LONG")
 
                     elif tjr_short_signal(hist, i, htf_row):
-                        logging.info("SHORT – k_fast %.1f  adx %.1f  fvg_dn %s  bos_dn %s",
-                                     bar.k_fast, bar.adx,
-                                     htf_row.fvg_dn, htf_row.bos_dn)
+                        logging.info("Short‑signal %s  k_fast %.1f  adx %.1f",
+                                     bar.name, bar.k_fast, bar.adx)
                         alert_side(bar, "SHORT")
-
+                    elif logging.getLogger().isEnabledFor(logging.INFO):
+                        logging.info("No‑trade %s  k_fast %.1f  adx %.1f",
+                                     bar.name, bar.k_fast, bar.adx)
         except Exception as exc:
             logging.error("WS stream error: %s\n%s", exc, traceback.format_exc())
             await asyncio.sleep(5)        # back‑off then reconnect
@@ -158,5 +192,13 @@ async def kline_stream() -> None:
 
 # ───────────────────────────────── entry‑point ───────────────────────────────
 if __name__ == "__main__":
-    logging.info("SOL/USDT TJR 15‑m signal bot starting %s", datetime.utcnow())
-    asyncio.run(kline_stream())
+    logging.info("SOL/USDT TJR 15‑m signal bot starting  %s", datetime.utcnow())
+    try:
+        asyncio.run(kline_stream())
+    finally:
+        # ensure REST client closes cleanly
+        try:
+            asyncio.get_event_loop().run_until_complete(REST.close())
+        except Exception:
+            pass
+

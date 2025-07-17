@@ -23,6 +23,10 @@ def has_fvg(bar_prev, bar_curr) -> bool:
     return gap > config.FVG_MIN_PX
 
 # --- 79 % fib touch ----------------------
-def fib_tag(raid_px, retrace_px, direction) -> bool:
-    ratio = abs((retrace_px - raid_px) / raid_px)
-    return ratio >= config.FIB_EXT
+# helpers/ltf.py – no look‑ahead in fib_tag
+def fib_tag(raid_px: float, bar, direction: str) -> bool:
+    """Require the same candle that swept liquidity to tag ≥ 79 % level."""
+    if direction == "long":
+        return (bar.h - raid_px) / raid_px >= config.FIB_EXT
+    else:
+        return (raid_px - bar.l) / raid_px >= config.FIB_EXT

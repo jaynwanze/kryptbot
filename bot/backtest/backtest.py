@@ -7,7 +7,7 @@ import logging
 from datetime import datetime
 import pandas as pd
 import sys
-from helpers import config, is_bos, has_fvg,fib_tag,build_htf_levels, tjr_long_signal, tjr_short_signal
+from helpers import config,build_htf_levels, tjr_long_signal, tjr_short_signal, update_htf_levels
 from data import preload_history
 
 # ────────────────────────────────────────────────────────────────
@@ -41,6 +41,8 @@ from data import preload_history
 #     except Exception as exc:
 #         logging.error("Telegram error: %s", exc)
 
+LOOKBACK_BARS = 1_000       # keep history light
+
 # ───────── lightweight back-test ──────────
 def backtest(df: pd.DataFrame,
              equity0: float = config.STAKE_SIZE_USD,
@@ -66,11 +68,20 @@ def backtest(df: pd.DataFrame,
     # good_hours = GOOD_HOURS if good_hours is None else good_hours
 
     for i,(idx, bar) in enumerate(df.iterrows()):
-        bar, prev = df.iloc[i], df.iloc[i-1] if i > 0 else df.iloc[i]
-        htf_row = htf_levels.loc[idx]
+        
+        bar  = df.iloc[i]
+        prev = df.iloc[i-1] if i else bar      # guard for i==0
 
-        # if bar[["atr", "adx", "k_fast"]].isna().any():
-        #     curve.append(equity); continue     # still warming up
+        if bar[["atr", "adx", "k_fast"]].isna().any():
+            curve.append(equity); continue     # still warming up
+        
+        # ---- update HTF levels  -----------------------------------
+        htf_levels = update_htf_levels(df.iloc[: i+1])
+        try:
+            htf_row = htf_levels.loc[bar.name]
+        except KeyError:
+            curve.append(equity); continue     # HTF still warming up
+
 
         # ---- manage open position ----------------------------------
         if pos:
@@ -100,7 +111,7 @@ def backtest(df: pd.DataFrame,
 
         # ---- look for new entry  -----------------------------------
         # Optional condition to add - and bar.name.hour in good_hours
-        if pos is None :
+        if pos is None and i >= config.BOS_LOOKBACK + 1:
             if tjr_long_signal(df, i, htf_row):
                 print(i)
                 stop = config.ATR_MULT_SL*bar.atr *1.6
@@ -152,7 +163,9 @@ def backtest(df: pd.DataFrame,
 
 # ───────────────────────────────── entrypoint ────────────────────────────────
 if __name__ == "__main__":
-    logging.info("SOL/USDT TJR Strategy Backtest Starting %s", datetime.utcnow())
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s  %(levelname)s  %(message)s")
+    logging.info("LRS back‑test starting  %s", datetime.utcnow().strftime("%F %T"))
     hist = asyncio.run(preload_history(limit=3000))
     hist_30d = hist[hist.index >= hist.index[-1] - pd.Timedelta(days=30)]
     backtest(hist_30d)   # pass accessor
