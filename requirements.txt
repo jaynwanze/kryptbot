@@ -1,9 +1,13 @@
-asyncio
-websockets
-pandas
-ta
-ccxt
-python-telegram-bot==13.*
-matplotlib
-dotenv
+# core
 numpy
+pandas>=2.0
+ta
+matplotlib       
+
+# networking / exchange
+websockets>=11.0
+ccxt>=4.0         
+
+# messaging & env
+python-telegram-bot==13.*
+python-dotenv
