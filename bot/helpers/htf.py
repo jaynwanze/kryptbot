@@ -65,5 +65,6 @@ def build_htf_levels(df15: pd.DataFrame) -> pd.DataFrame:
 
 def update_htf_levels(df15: pd.DataFrame) -> pd.DataFrame:
     # use only the last X days to compute D / H4 / session extrema
-    recent = df15.last(HTF_WINDOW)
+    window = pd.Timedelta(config.HTF_DAYS, unit="D")
+    recent = df15.loc[df15.index >= df15.index[-1] - window]  
     return build_htf_levels(recent)
