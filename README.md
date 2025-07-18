@@ -106,14 +106,14 @@ docker run -d --name kryptbot --env-file .env --restart unless-stopped kryptbot:
 ## 6. Requirements 
 (inside requirements.txt)
 ```txt
-ccxt
-pandas
 numpy
-matplotlib
+pandas>=2.0
+ta                # or pandas-ta, whichever you actually call in helpers
+matplotlib        # only needed for back‑test plots
+websockets>=11.0
+ccxt>=4.0         # 4.x has the async_support sub‑package
 python-telegram-bot==13.*
-websockets
 python-dotenv
-ta              # technical indicators for back-test
 ```
 
 ## 7. Road-map / TODO
