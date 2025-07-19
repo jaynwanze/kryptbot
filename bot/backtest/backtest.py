@@ -42,6 +42,9 @@ from data import preload_history
 #         logging.error("Telegram error: %s", exc)
 
 LOOKBACK_BARS = 1_000       # keep history light
+GOOD_HOURS = config.SESSION_WINDOWS.get("asia", []) + \
+                 config.SESSION_WINDOWS.get("eu", []) + \
+                 config.SESSION_WINDOWS.get("ny", [])
 
 # ───────── lightweight back-test ──────────
 def backtest(df: pd.DataFrame,
@@ -65,7 +68,7 @@ def backtest(df: pd.DataFrame,
     trades   = []
     curve    = []
 
-    # good_hours = GOOD_HOURS if good_hours is None else good_hours
+    good_hours = GOOD_HOURS
 
     for i,(idx, bar) in enumerate(df.iterrows()):
         
@@ -110,8 +113,20 @@ def backtest(df: pd.DataFrame,
                 pos = None
 
         # ---- look for new entry  -----------------------------------
-        # Optional condition to add - and bar.name.hour in good_hours
         if pos is None and i >= config.BOS_LOOKBACK + 1:
+            # bar.name.hour in GOOD_HOURS:
+            # avg_atr = bar.atr30
+            # if bar.atr < 0.6 * avg_atr:
+            #     continue          # volatility too low – ignore
+            # # ADX test (≥ 30 *and* rising)
+            # if bar.adx < 30 or bar.adx <= bar.adx_prev:
+            #     continue
+            # inside the back‑test loop, **before** you call tjr_long/short_signal
+            four_h = df['c'].iloc[:i+1].resample('4h').last()
+            trend = four_h.pct_change().rolling(3).mean().abs().iloc[-1]
+            if trend < 0.006:          # < 0.6 % move in the last 3 days ⇒ chop
+                    continue
+
             if tjr_long_signal(df, i, htf_row):
                 print(i)
                 stop = config.ATR_MULT_SL*bar.atr *1.6
@@ -135,8 +150,8 @@ def backtest(df: pd.DataFrame,
     #       f"entries {len(trades)}  |  wins {wins}  losses {losses}  "
     #       f"win-rate {wins/(wins+losses):.1%}  |  final ${equity:,.0f}")
        # ---------- final statistics ----------
-    wins   = sum(1 for t in trades if t["pnl"] > 0)
-    losses = sum(1 for t in trades if t["pnl"] < 0)
+    # wins   = sum(1 for t in trades if t["pnl"] > 0)
+    # losses = sum(1 for t in trades if t["pnl"] < 0)
     total  = wins + losses
     pf     = (sum(t["pnl"] for t in trades if t["pnl"] > 0) /
               abs(sum(t["pnl"] for t in trades if t["pnl"] < 0) or 1))

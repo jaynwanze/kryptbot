@@ -16,7 +16,7 @@ LEVERAGE         = 25
 ATR_MULT_SL     = 1       
 ATR_MULT_TP     = 2     # RR 2:1
 WICK_BUFFER     = 0.25               # extra ATR cushion
-ADX_FLOOR       = 20
+ADX_FLOOR       = 25
 STO_K_MIN_LONG  = 45
 STO_K_MIN_SHORT = 30
 HTF_DAYS          = 15        # days of history to seek untapped highs/lows
@@ -28,6 +28,6 @@ SESSION_WINDOWS   = {         # UTC sessions
 }
 
 ###  LTF confirmation
-BOS_LOOKBACK = 10     # was 20
+BOS_LOOKBACK = 5     # was 20
 FVG_MIN_PX   = 0.0003  # was 0.0005
 FIB_EXT      = 0.79      # 79 % retrace / extension

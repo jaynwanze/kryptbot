@@ -1,18 +1,6 @@
 from typing import Tuple
-from helpers.config import STO_K_MIN_LONG, STO_K_MIN_SHORT, ADX_FLOOR
-
-def long_signal(bar, prev, h1r):
-    cross_up = bar.ema7 > bar.ema14 and prev.ema7 <= prev.ema14
-    return (cross_up and bar.k_fast > STO_K_MIN_LONG
-            and bar.rsi  > 45 and bar.adx >= ADX_FLOOR
-            and h1r.close > h1r.ema50 and h1r.slope > 0)
-
-def short_signal(bar, prev, h1r):
-    cross_dn = bar.ema7 < bar.ema14 and prev.ema7 >= prev.ema14
-    return (cross_dn and bar.k_fast > STO_K_MIN_SHORT
-            and bar.rsi  > 30 and bar.adx >= ADX_FLOOR
-            and h1r.close < h1r.ema50 and h1r.slope < 0)
-from helpers import htf, ltf, config
+from helpers.config import ADX_FLOOR
+from helpers import ltf
 
 def raid_happened(bar, htf_row) -> Tuple[bool, str]:
     """
@@ -40,9 +28,9 @@ def tjr_long_signal(df, i, htf_row) -> bool:
     #  BOS + FVG + fib tag (any two out of three is enough)
     checks = 0
     checks += ltf.is_bos(df, i, "long")
-    checks += ltf.has_fvg(prev, bar)
+    # checks += ltf.has_fvg(df, i-1, "long")
     checks += ltf.fib_tag(bar.l, bar, "long")
-    return checks >= 1  # need at least two confirmations
+    return checks >= 2
 
 def tjr_short_signal(df, i, htf_row) -> bool:
     bar, prev = df.iloc[i], df.iloc[i-1]
@@ -51,6 +39,6 @@ def tjr_short_signal(df, i, htf_row) -> bool:
         return False
     checks = 0
     checks += ltf.is_bos(df, i, "short")
-    checks += ltf.has_fvg(prev, bar)
+    # checks += ltf.has_fvg(df, i-1, "short")
     checks += ltf.fib_tag(bar.h, bar, "short")
-    return checks >= 1
+    return checks >= 2

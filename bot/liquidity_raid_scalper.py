@@ -164,7 +164,7 @@ async def kline_stream() -> None:
                     bar = hist.iloc[-1]
                     if bar[["atr","adx","k_fast"]].isna().any():
                         continue  # indicator NA guard
-                  # higher‑TF context
+                    # higher‑TF context
                     try:
                         htf_levels = update_htf_levels(hist)
                         htf_row    = htf_levels.loc[bar.name]
@@ -173,6 +173,10 @@ async def kline_stream() -> None:
 
                     # Signals
                     i = len(hist) - 1
+                    # four_h = hist['c'].iloc[:i+1].resample('4h').last()
+                    # trend = four_h.pct_change().rolling(3).mean().abs().iloc[-1]
+                    # if trend < 0.006:          # < 0.6 % move in the last 3 days ⇒ chop
+                        # continue
                     if tjr_long_signal(hist, i, htf_row):
                         logging.info("Long‑signal %s  k_fast %.1f  adx %.1f",
                                      bar.name, bar.k_fast, bar.adx)

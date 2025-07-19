@@ -15,6 +15,7 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
                         (df.l - df.c.shift()).abs(),
                     ])
     df["atr"]    = pd.Series(tr, index=df.index).rolling(14).mean()
+    df["atr30"] = df.atr.rolling(30).mean()
 
     # RSI / Stoch‑RSI
     delta        = df.c.diff()
@@ -24,6 +25,7 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["rsi"] = rsi                       # <‑‑ stored for signal logic
     rsi_min      = rsi.rolling(14).min();   rsi_max = rsi.rolling(14).max()
     df["k_fast"] = ((rsi - rsi_min)/(rsi_max - rsi_min)).rolling(3).mean()*100
+    df["d_fast"] = df.k_fast.rolling(3).mean()  # %D fast
 
     # ADX
     plus_dm      = np.where(df.h.diff() > df.l.diff(),
@@ -35,6 +37,7 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     minus_di     = 100 * pd.Series(minus_dm, index=df.index).rolling(14).sum() / tr_n
     dx           = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
     df["adx"]    = dx.rolling(14).mean()
+    df["adx_prev"] = df.adx.shift()
 
     # Volume MA (optional filter)
     df["vol20"]  = df.v.rolling(20).mean()
