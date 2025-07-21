@@ -7,7 +7,7 @@ import logging
 from datetime import datetime
 import pandas as pd
 import sys
-from helpers import config,build_htf_levels, tjr_long_signal, tjr_short_signal, update_htf_levels
+from helpers import config,build_htf_levels, tjr_long_signal, tjr_short_signal, update_htf_levels_new,ltf
 from data import preload_history
 
 # ────────────────────────────────────────────────────────────────
@@ -60,7 +60,7 @@ def backtest(df: pd.DataFrame,
     • prints every trade + summary and returns nothing
     """
     # ------------- build tf with hisotry data -------------------
-    htf_levels   = build_htf_levels(df)
+    htf_levels   = build_htf_levels(df.copy())
 
     # ------------- back-test loop ------------------------------------
     equity   = equity0
@@ -79,7 +79,7 @@ def backtest(df: pd.DataFrame,
             curve.append(equity); continue     # still warming up
         
         # ---- update HTF levels  -----------------------------------
-        htf_levels = update_htf_levels(df.iloc[: i+1])
+        htf_levels = update_htf_levels_new(htf_levels, bar)
         try:
             htf_row = htf_levels.loc[bar.name]
         except KeyError:
@@ -113,29 +113,48 @@ def backtest(df: pd.DataFrame,
                 pos = None
 
         # ---- look for new entry  -----------------------------------
-        if pos is None and i >= config.BOS_LOOKBACK + 1:
+        if pos is None:
             # bar.name.hour in GOOD_HOURS:
-            # avg_atr = bar.atr30
-            # if bar.atr < 0.6 * avg_atr:
-            #     continue          # volatility too low – ignore
-            # # ADX test (≥ 30 *and* rising)
-            # if bar.adx < 30 or bar.adx <= bar.adx_prev:
-            #     continue
             # inside the back‑test loop, **before** you call tjr_long/short_signal
-            four_h = df['c'].iloc[:i+1].resample('4h').last()
-            trend = four_h.pct_change().rolling(3).mean().abs().iloc[-1]
-            if trend < 0.006:          # < 0.6 % move in the last 3 days ⇒ chop
-                    continue
+            # four_h = df['c'].iloc[:i+1].resample('4h').last()
+            # trend = four_h.pct_change().rolling(3).mean().abs().iloc[-1]
+            # if trend < 0.006:          # < 0.6 % move in the last 3 days ⇒ chop
+            #         continue
+            # if i % 4 == 0:          # print probe every 4th candle, not every one
 
+            #     probe_b = ltf.is_bos(df, i, "long")
+            #     probe_f = ltf.has_fvg(df, i-1, "long")
+            #     probe_x = ltf.fib_tag(bar.l, bar, "long")
+            #     print (f"Probe: BOS {probe_b}  FVG {probe_f}  FIB {probe_x}")
+
+        
+            vol_norm = bar.atr / bar.atr30
+            min_adx  = 10 + 8 * vol_norm            
+            atr_veto = 0.5 + 0.3 * vol_norm        
+            if bar.adx < min_adx or bar.atr < atr_veto * bar.atr30:
+                    continue 
+            
             if tjr_long_signal(df, i, htf_row):
+                # if bar.k_fast < config.STO_K_MIN_LONG:
+                #     continue
+                b = ltf.is_bos(df, i, "long")
+                f = ltf.has_fvg(df, i-1, "long")
+                x = ltf.fib_tag(bar.l, bar, "long")
                 print(i)
+                print(f"{bar.name}  BOS {b}  FVG {f}  FIB {x}")
                 stop = config.ATR_MULT_SL*bar.atr *1.6
                 pos  = dict(dir=1, entry=bar.c,
                         sl=bar.c-stop - config.WICK_BUFFER * bar.atr, tp=bar.c+config.ATR_MULT_TP*bar.atr,
                         risk=equity0*risk_pct, half=False, time_entry=idx, time_close=None)
 
             elif tjr_short_signal(df, i, htf_row):
+                # if bar.k_fast > 100 - config.STO_K_MIN_SHORT:
+                #     continue
                 print(i)
+                b = ltf.is_bos(df, i, "short")
+                f = ltf.has_fvg(df, i-1, "short")
+                x = ltf.fib_tag(bar.h, bar, "short")
+                print(f"{bar.name}  BOS {b}  FVG {f}  FIB {x}")
                 stop = config.ATR_MULT_SL*bar.atr *1.6
                 pos  = dict(dir=-1, entry=bar.c,
                         sl=bar.c+stop + config.WICK_BUFFER * bar.atr, tp=bar.c-config.ATR_MULT_TP*bar.atr,

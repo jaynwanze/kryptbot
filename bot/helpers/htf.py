@@ -63,8 +63,62 @@ def build_htf_levels(df15: pd.DataFrame) -> pd.DataFrame:
     return out.ffill()
 
 
-def update_htf_levels(df15: pd.DataFrame) -> pd.DataFrame:
-    # use only the last X days to compute D / H4 / session extrema
-    window = pd.Timedelta(config.HTF_DAYS, unit="D")
-    recent = df15.loc[df15.index >= df15.index[-1] - window]  
-    return build_htf_levels(recent)
+# ────────────────────────── incremental HTF update ─────────────────────────
+def update_htf_levels_new(htf: pd.DataFrame, bar15: pd.Series) -> pd.DataFrame:
+    ts = bar15.name
+    if ts not in htf.index:
+        htf.loc[ts] = htf.iloc[-1]
+
+    # ------------------------------------------------------- daily
+    prev_day = htf.index[-2].date()
+    this_day = ts.date()
+    if this_day != prev_day:
+        # new UTC day  → start fresh
+        htf.at[ts, "D_H"] = bar15.h
+        htf.at[ts, "D_L"] = bar15.l
+    else:
+        htf.at[ts, "D_H"] = max(htf.iat[-2, htf.columns.get_loc("D_H")], bar15.h)
+        htf.at[ts, "D_L"] = min(htf.iat[-2, htf.columns.get_loc("D_L")], bar15.l)
+
+    # ------------------------------------------------------- rolling 4 h
+    cutoff_4h = ts - pd.Timedelta(hours=4)
+    recent4   = htf.loc[cutoff_4h:]
+    htf.at[ts, "H4_H"] = max(recent4["H4_H"].iat[-1], bar15.h)
+    htf.at[ts, "H4_L"] = min(recent4["H4_L"].iat[-1], bar15.l)
+
+    # ------------------------------------------------------- sessions
+    for name, (h0, h1) in config.SESSION_WINDOWS.items():
+        col_H, col_L = f"{name}_H", f"{name}_L"
+
+        # ‘in session’ test with midnight wrap
+        hr = ts.hour
+        in_sess = (h0 <= hr <= h1) if h0 <= h1 else (hr >= h0 or hr <= h1)
+
+        # find the *last* row that belongs to the same session window
+        # (could be previous day for Asia for example)
+        same_sess_mask = _session_mask(htf.index, h0, h1)
+        same_sess_rows = htf.index[same_sess_mask & (htf.index.date == ts.date())]
+        if not in_sess or len(same_sess_rows) == 0:   # brand‑new session row
+            htf.at[ts, col_H] = bar15.h
+            htf.at[ts, col_L] = bar15.l
+        else:                                        # extend current session range
+            prev_H = htf.at[same_sess_rows[-1], col_H]
+            prev_L = htf.at[same_sess_rows[-1], col_L]
+            htf.at[ts, col_H] = max(prev_H, bar15.h)
+            htf.at[ts, col_L] = min(prev_L, bar15.l)
+
+    # ---- trim history to keep RAM footprint identical
+    cutoff = ts - pd.Timedelta(days=config.HTF_DAYS)
+    if htf.index[0] < cutoff:
+        htf.drop(htf.index[0], inplace=True)
+
+    return htf
+
+
+# ─────────────────────────────── helpers ────────────────────────────────
+def _session_mask(idx: pd.DatetimeIndex, h0: int, h1: int) -> pd.Series:
+    """Boolean mask marking the hours [h0 … h1] *inclusive*."""
+    hr = idx.hour
+    if h0 <= h1:                         # normal window (e.g. 8‑17)
+        return (hr >= h0) & (hr <= h1)
+    return (hr >= h0) | (hr <= h1)       # wraps midnight (e.g. 22‑2)

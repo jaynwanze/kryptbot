@@ -16,10 +16,10 @@ from   dotenv   import load_dotenv
 from helpers import (
     config,
     compute_indicators,        # → ATR, ADX, Stoch, RSI, …
-    update_htf_levels,          # 4‑hour / daily structure map
     build_htf_levels,          # 4‑hour / daily structure map
     tjr_long_signal,           # entry rules
-    tjr_short_signal,          
+    tjr_short_signal,  
+    update_htf_levels_new,     # incremental HTF levels update        
 )
 from data import preload_history
 
@@ -36,7 +36,6 @@ load_dotenv()
 TG_TOKEN   = os.getenv("TELE_TOKEN")
 TG_CHAT_ID = int(os.getenv("TG_CHAT_ID"))
 bot        = Bot(token=TG_TOKEN)
-LOOKAHEAD = config.BOS_LOOKBACK          # look-ahead for BOS
 
 # ────────────────────────────────────────────────────────────────
 #  Bybit Web‑socket constants
@@ -84,7 +83,7 @@ def alert_side(bar: pd.Series, side: str) -> None:
 async def kline_stream() -> None:
     # 1) Pull a chunk of history, build indicators & HTF context
     hist = await preload_history(limit=1000)           # 15‑min bars
-    htf_levels = build_htf_levels(hist)                # 4‑hour/daily map
+    htf_levels   = build_htf_levels(hist.copy())
 
     logging.info("History pre‑loaded: %d bars (%s → %s)",
                  len(hist), hist.index[0], hist.index[-1])
@@ -166,17 +165,27 @@ async def kline_stream() -> None:
                         continue  # indicator NA guard
                     # higher‑TF context
                     try:
-                        htf_levels = update_htf_levels(hist)
+                        htf_levels = update_htf_levels_new(htf_levels, bar)
                         htf_row    = htf_levels.loc[bar.name]
                     except KeyError:
                             continue      
 
                     # Signals
                     i = len(hist) - 1
-                    four_h = hist['c'].iloc[:i+1].resample('4h').last()
-                    trend = four_h.pct_change().rolling(3).mean().abs().iloc[-1]
-                    if trend < 0.006:          # < 0.6 % move in the last 3 days ⇒ chop
-                        continue
+                    
+                    #4H trend filter
+                    # four_h = hist['c'].iloc[:i+1].resample('4h').last()
+                    # trend = four_h.pct_change().rolling(3).mean().abs().iloc[-1]
+                    # if trend < 0.006:          # < 0.6 % move in the last 3 days ⇒ chop
+                    #     continue
+                    
+                    # ADX & volume veto
+                    vol_norm = bar.atr / bar.atr30
+                    min_adx  = 10 + 8 * vol_norm            
+                    atr_veto = 0.5 + 0.3 * vol_norm        
+                    if bar.adx < min_adx or bar.atr < atr_veto * bar.atr30:
+                            continue 
+                    
                     if tjr_long_signal(hist, i, htf_row):
                         logging.info("Long‑signal %s  k_fast %.1f  adx %.1f",
                                      bar.name, bar.k_fast, bar.adx)

@@ -28,6 +28,5 @@ SESSION_WINDOWS   = {         # UTC sessions
 }
 
 ###  LTF confirmation
-BOS_LOOKBACK = 5     # was 20
-FVG_MIN_PX   = 0.0003  # was 0.0005
-FIB_EXT      = 0.79      # 79 % retrace / extension
+FVG_MIN_PX   = 0.0005  # was 0.0005
+FIB_EXT      = 0.90      # 79 % retrace / extension
