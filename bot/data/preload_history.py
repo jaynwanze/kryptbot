@@ -3,16 +3,16 @@ import requests
 import pandas as pd
 from helpers import config, compute_indicators
 
-async def preload_history(limit: int = 18000) -> pd.DataFrame:
+async def preload_history(symbol:str, interval:str, limit: int = 1000) -> pd.DataFrame:
     """
     Fetch up to *limit* most-recent 15-m candles from Bybit REST and return a DataFrame.
     """
     url = "https://api.bybit.com/v5/market/kline"
     params = {
         "category": "linear",
-        "symbol":   config.PAIR,
-        "interval": config.INTERVAL,
-        "limit":    1000
+        "symbol":   symbol,
+        "interval": interval,
+        "limit":    limit
     }
     all_rows = []
     last_ts = None

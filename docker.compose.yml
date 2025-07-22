@@ -1,0 +1,18 @@
+# docker-compose.yml
+version: "3.9"
+
+services:
+  liquidity_scalper:
+    image: kryptbot:latest     # built from Dockerfile above
+    command: python -m bot.liquidity_raid_scalper
+    restart: unless-stopped
+    env_file:
+      - .env                   # TELE_TOKEN, etc.
+    # volumes, ports, … if you need them
+
+  lrs_engine_pair:
+    image: kryptbot:latest
+    command: python -m bot.lrs_engine_pair
+    restart: unless-stopped
+    env_file:
+      - .env

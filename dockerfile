@@ -11,4 +11,3 @@ RUN pip install --upgrade pip \
  && pip install --no-cache-dir -r requirements.txt
 
 COPY . /app
-CMD ["python", "-m", "bot.liquidity_raid_scalper"]

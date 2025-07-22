@@ -4,7 +4,7 @@ from helpers import config
 
 # --- Break of structure -----------------
 def is_bos(df: pd.DataFrame, idx: int, direction: str,
-           left: int = 2, right: int = 2) -> bool:
+           left: int = 3, right: int = 3) -> bool:
     if idx < left + right + 1:
         return False
     win = df["h" if direction == "long" else "l"]

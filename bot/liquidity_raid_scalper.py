@@ -62,6 +62,7 @@ def alert_side(bar: pd.Series, side: str) -> None:
         emoji = "📉"
 
     msg = (
+        f"SOLUSDT LONG LRS ENGINE LIVE TRADING BOT*\n"
         f"{emoji} *{config.PAIR} {config.INTERVAL}‑m {side} signal*\n"
         f"`{bar.name:%Y‑%m-%d %H:%M}` UTC\n"
         f"Entry  : `{bar.c:.3f}`\n"
@@ -82,7 +83,7 @@ def alert_side(bar: pd.Series, side: str) -> None:
 # ────────────────────────────────────────────────────────────────
 async def kline_stream() -> None:
     # 1) Pull a chunk of history, build indicators & HTF context
-    hist = await preload_history(limit=1000)           # 15‑min bars
+    hist = await preload_history(symbol=config.PAIR, interval=config.INTERVAL, limit=1000)           # 15‑min bars
     htf_levels   = build_htf_levels(hist.copy())
 
     logging.info("History pre‑loaded: %d bars (%s → %s)",
@@ -197,7 +198,8 @@ async def kline_stream() -> None:
                         alert_side(bar, "SHORT")
                     elif logging.getLogger().isEnabledFor(logging.INFO):
                         logging.info("No‑trade %s  k_fast %.1f  adx %.1f",
-                                     bar.name, bar.k_fast, bar.adx)
+                                     bar.name, bar.k_fast, bar.adx)                   
+
         except Exception as exc:
             logging.error("WS stream error: %s\n%s", exc, traceback.format_exc())
             await asyncio.sleep(5)        # back‑off then reconnect
@@ -205,7 +207,7 @@ async def kline_stream() -> None:
 
 # ───────────────────────────────── entry‑point ───────────────────────────────
 if __name__ == "__main__":
-    logging.info("SOL/USDT TJR 15‑m signal bot starting  %s", datetime.utcnow())
+    logging.info("SOL/USDT(LONGS) TJR 15‑m signal bot starting  %s", datetime.utcnow())
     try:
         asyncio.run(kline_stream())
     finally:

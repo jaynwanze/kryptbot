@@ -79,12 +79,11 @@ def backtest(df: pd.DataFrame,
             curve.append(equity); continue     # still warming up
         
         # ---- update HTF levels  -----------------------------------
-        htf_levels = update_htf_levels_new(htf_levels, bar)
+        # htf_levels = update_htf_levels_new(htf_levels, bar)
         try:
             htf_row = htf_levels.loc[bar.name]
         except KeyError:
             curve.append(equity); continue     # HTF still warming up
-
 
         # ---- manage open position ----------------------------------
         if pos:
@@ -94,7 +93,7 @@ def backtest(df: pd.DataFrame,
                 equity += pnl            
                 pos['time_close'] = idx
                # stop-loss
-                trades.append({'exit': bar.name, 'pnl': -pos['risk']})
+                trades.append({'exit': bar.name, 'pnl': -pos['risk'], 'dir': pos['dir']})
                 direction = "⬆LONG" if pos['dir'] == 1 else "🔻SHORT"
                 print (f"{direction} Trade Entry: {pos['entry']} | Timestamp: {pos['time_entry']}  | Take Proft: {pos['tp']} | Stop Loss: {pos['sl']}  |  PnL: ${pnl:.2f}  |  Equity: ${equity:.2f} | Volume: {bar.v:.0f}")
                 print(f"🔴Trade closed: {idx} | Stop Loss hit: {pos['time_close']} | Exit: {bar.c} | SL: {pos['sl']}")
@@ -106,7 +105,7 @@ def backtest(df: pd.DataFrame,
                 equity += pnl
                 pos['time_close'] = idx
                 trades.append({'exit': bar.name,
-                           'pnl' :  pos['risk']*config.ATR_MULT_TP/config.ATR_MULT_SL})
+                           'pnl' :  pos['risk']*config.ATR_MULT_TP/config.ATR_MULT_SL, 'dir': pos['dir']})
                 direction = "⬆LONG" if pos['dir'] == 1 else "🔻SHORT"
                 print (f"{direction} Trade Entry: {pos['entry']} | Timestamp: {pos['time_entry']}  | Take Proft: {pos['tp']} | Stop Loss: {pos['sl']}  |  PnL: ${pnl:.2f}  |  Equity: ${equity:.2f} | Volume: {bar.v:.0f}")
                 print(f"🟢Trade closed: {idx} | Target hit: {pos['time_close']} | Exit: {bar.c} | TP: {pos['tp']}")
@@ -114,7 +113,6 @@ def backtest(df: pd.DataFrame,
 
         # ---- look for new entry  -----------------------------------
         if pos is None:
-            # bar.name.hour in GOOD_HOURS:
             # inside the back‑test loop, **before** you call tjr_long/short_signal
             # four_h = df['c'].iloc[:i+1].resample('4h').last()
             # trend = four_h.pct_change().rolling(3).mean().abs().iloc[-1]
@@ -161,6 +159,8 @@ def backtest(df: pd.DataFrame,
                         risk=equity0*risk_pct, half=False,time_entry=idx, time_close=None)
 
         curve.append(equity)
+        # ---- update HTF levels  -----------------------------------
+        htf_levels = update_htf_levels_new(htf_levels, bar)
 
     # ------------- final statistics ---------------------------------
     wins  = sum(1 for t in trades if t["pnl"] > 0)
@@ -172,12 +172,19 @@ def backtest(df: pd.DataFrame,
     # wins   = sum(1 for t in trades if t["pnl"] > 0)
     # losses = sum(1 for t in trades if t["pnl"] < 0)
     total  = wins + losses
-    pf     = (sum(t["pnl"] for t in trades if t["pnl"] > 0) /
-              abs(sum(t["pnl"] for t in trades if t["pnl"] < 0) or 1))
+    gross_profit = sum(t["pnl"] for t in trades if t["pnl"] > 0)
+    gross_loss   = abs(sum(t["pnl"] for t in trades if t["pnl"] < 0))
+
+    # profit‑factor: gross‑profit / |gross‑loss|
+    pf = float("inf") if gross_loss == 0 else round(gross_profit / gross_loss, 2)
+
     
     print(f"... entries {len(trades)} | wins {wins} losses {losses} "
       f"win-rate {wins/total:.1%}" if total else "win-rate n/a",
       f"| final ${equity:,.0f} | R.R {config.ATR_MULT_TP}:{config.ATR_MULT_SL} | ")
+    longs  = sum(p["dir"] ==  1 for p in trades)
+    shorts = sum(p["dir"] == -1 for p in trades)
+    print(f"longs {longs}, shorts {shorts}, win% {wins/total:.1%}")
     
     # optional: equity curve
     pd.Series(curve, index=df.index[-len(curve):]).plot(grid=True, figsize=(10,3))
@@ -200,6 +207,6 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s  %(levelname)s  %(message)s")
     logging.info("LRS back‑test starting  %s", datetime.utcnow().strftime("%F %T"))
-    hist = asyncio.run(preload_history(limit=3000))
+    hist = asyncio.run(preload_history(symbol=config.PAIR, interval=config.INTERVAL, limit=3000))
     hist_30d = hist[hist.index >= hist.index[-1] - pd.Timedelta(days=30)]
     backtest(hist_30d)   # pass accessor
