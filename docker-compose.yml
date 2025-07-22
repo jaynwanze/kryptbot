@@ -1,18 +1,28 @@
-# docker-compose.yml
+# docker-compose.yaml  (hyphen between docker‑compose)
 version: "3.9"
 
 services:
-  liquidity_scalper:
-    image: kryptbot:latest     # built from Dockerfile above
+  lrs_scalper:
+    build: .
+    image: kryptbot:latest          # built from the Dockerfile in repo root
     command: python -m bot.liquidity_raid_scalper
+    container_name: krypt_scalper
+    env_file: .env                  # TELE_TOKEN, TG_CHAT_ID, …
     restart: unless-stopped
-    env_file:
-      - .env                   # TELE_TOKEN, etc.
-    # volumes, ports, … if you need them
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
-  lrs_engine_pair:
-    image: kryptbot:latest
+  lrs_pair_engine:
+    image: kryptbot:latest          # reuse the same layer‑cached image
     command: python -m bot.lrs_pair_engine
+    container_name: krypt_pair
+    env_file: .env
     restart: unless-stopped
-    env_file:
-      - .env
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

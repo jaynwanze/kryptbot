@@ -56,7 +56,7 @@ def alert_side(pair: str, bar: pd.Series, side: str) -> None:
         emoji = "📉"
 
     msg = (
-        f"LRS MULTI PAIR ENGINE LIVE TRADING BOT*\n"
+        "*LRS MULTI PAIR ENGINE LIVE TRADING BOT*\n"
         f"{emoji} *{pair} {TF}‑m {side} signal*\n"
         f"`{bar.name:%Y‑%m‑%d %H:%M}` UTC\n"
         f"Entry  : `{bar.c:.4f}`\n"
@@ -170,6 +170,9 @@ async def kline_stream(pair: str) -> None:
                     elif tjr_short_signal(hist, i, htf_row):
                         logging.info("[%s] SHORT signal %.1f/%.1f", pair, bar.k_fast, bar.adx)
                         alert_side(pair, bar, "SHORT")
+                    elif logging.getLogger().isEnabledFor(logging.INFO):
+                        logging.info("No‑trade %s  k_fast %.1f  adx %.1f",
+                                     bar.name, bar.k_fast, bar.adx)              
 
                     # maintain HTF map
                     htf_levels = update_htf_levels_new(htf_levels, bar)

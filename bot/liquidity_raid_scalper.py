@@ -62,7 +62,7 @@ def alert_side(bar: pd.Series, side: str) -> None:
         emoji = "📉"
 
     msg = (
-        f"SOLUSDT LONG LRS ENGINE LIVE TRADING BOT*\n"
+        "*LRS MULTI PAIR ENGINE LIVE TRADING BOT*\n"          # open + close
         f"{emoji} *{config.PAIR} {config.INTERVAL}‑m {side} signal*\n"
         f"`{bar.name:%Y‑%m-%d %H:%M}` UTC\n"
         f"Entry  : `{bar.c:.3f}`\n"
