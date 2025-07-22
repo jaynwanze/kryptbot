@@ -12,7 +12,7 @@ services:
 
   lrs_engine_pair:
     image: kryptbot:latest
-    command: python -m bot.lrs_engine_pair
+    command: python -m bot.lrs_pair_engine
     restart: unless-stopped
     env_file:
       - .env
