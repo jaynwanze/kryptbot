@@ -7,39 +7,8 @@ import logging
 from datetime import datetime
 import pandas as pd
 import sys
-from helpers import config,build_htf_levels, tjr_long_signal, tjr_short_signal, update_htf_levels_new,ltf
+from helpers import config,build_htf_levels, tjr_long_signal, tjr_short_signal, update_htf_levels_new,ltf,round_price,alert_side
 from data import preload_history
-
-# ────────────────────────────────────────────────────────────────
-#  Telegram alert
-# ────────────────────────────────────────────────────────────────
-
-# def test_alert_side(bar, side: str):
-#     """Test function to send a nicely formatted Telegram alert."""
-#     stop_off = (ATR_MULT_SL * 1.6 + WICK_BUFFER) * bar.atr
-#     if side == "LONG":
-#         sl = bar.c - stop_off
-#         tp = bar.c + ATR_MULT_TP * bar.atr
-#         emoji = "📈"
-#     else:  # SHORT
-#         sl = bar.c + stop_off
-#         tp = bar.c - ATR_MULT_TP * bar.atr
-#         emoji = "📉"
-
-#     msg = (
-#         f"{emoji} *{PAIR} {INTERVAL}‑m {side} signal*\n"
-#         f"`{bar.name:%Y‑%m‑%d %H:%M}` UTC\n"
-#         f"Entry  : `{bar.c:.3f}`\n"
-#         f"Stop   : `{sl:.3f}`\n"
-#         f"Target : `{tp:.3f}`\n"
-#         f"ADX    : `{bar.adx:.1f}`\n"
-#         f"StochK : `{bar.k_fast:.1f}`"
-#     )
-#     try:
-#         bot.send_message(chat_id=TG_CHAT_ID, text=msg, parse_mode="Markdown")
-#         logging.info("Telegram alert sent: %s %s", side, bar.name)
-#     except Exception as exc:
-#         logging.error("Telegram error: %s", exc)
 
 LOOKBACK_BARS = 1_000       # keep history light
 GOOD_HOURS = config.SESSION_WINDOWS.get("asia", []) + \
@@ -50,6 +19,7 @@ GOOD_HOURS = config.SESSION_WINDOWS.get("asia", []) + \
 def backtest(df: pd.DataFrame,
              equity0: float = config.STAKE_SIZE_USD,
              risk_pct: float = config.RISK_PCT,
+             pair: str = config.PAIR,
              ) -> None:
     """
     Replicates the notebook logic exactly:
@@ -79,7 +49,6 @@ def backtest(df: pd.DataFrame,
             curve.append(equity); continue     # still warming up
         
         # ---- update HTF levels  -----------------------------------
-        # htf_levels = update_htf_levels_new(htf_levels, bar)
         try:
             htf_row = htf_levels.loc[bar.name]
         except KeyError:
@@ -114,8 +83,8 @@ def backtest(df: pd.DataFrame,
         # ---- look for new entry  -----------------------------------
         if pos is None:
             # inside the back‑test loop, **before** you call tjr_long/short_signal
-            # four_h = df['c'].iloc[:i+1].resample('4h').last()
-            # trend = four_h.pct_change().rolling(3).mean().abs().iloc[-1]
+            four_h = df['c'].iloc[:i+1].resample('4h').last()
+            trend = four_h.pct_change().rolling(3).mean().abs().iloc[-1]
             # if trend < 0.006:          # < 0.6 % move in the last 3 days ⇒ chop
             #         continue
             # if i % 4 == 0:          # print probe every 4th candle, not every one
@@ -131,7 +100,8 @@ def backtest(df: pd.DataFrame,
             atr_veto = 0.5 + 0.3 * vol_norm        
             if bar.adx < min_adx or bar.atr < atr_veto * bar.atr30:
                     continue 
-            
+            # distance between entry and SL
+            stop_off = (config.ATR_MULT_SL * 1.6 + config.WICK_BUFFER) * bar.atr
             if tjr_long_signal(df, i, htf_row):
                 # if bar.k_fast < config.STO_K_MIN_LONG:
                 #     continue
@@ -140,9 +110,11 @@ def backtest(df: pd.DataFrame,
                 x = ltf.fib_tag(bar.l, bar, "long")
                 print(i)
                 print(f"{bar.name}  BOS {b}  FVG {f}  FIB {x}")
-                stop = config.ATR_MULT_SL*bar.atr *1.6
-                pos  = dict(dir=1, entry=bar.c,
-                        sl=bar.c-stop - config.WICK_BUFFER * bar.atr, tp=bar.c+config.ATR_MULT_TP*bar.atr,
+                entry = round_price(bar.c, pair)
+                sl    = round_price(entry - stop_off, pair)
+                tp    = round_price(entry + config.ATR_MULT_TP * bar.atr, pair)
+                pos  = dict(dir=1, entry=entry,
+                        sl=sl, tp=tp,
                         risk=equity0*risk_pct, half=False, time_entry=idx, time_close=None)
 
             elif tjr_short_signal(df, i, htf_row):
@@ -152,10 +124,12 @@ def backtest(df: pd.DataFrame,
                 b = ltf.is_bos(df, i, "short")
                 f = ltf.has_fvg(df, i-1, "short")
                 x = ltf.fib_tag(bar.h, bar, "short")
+                entry = round_price(bar.c, pair)
+                sl    = round_price(entry + stop_off, pair)
+                tp    = round_price(entry - config.ATR_MULT_TP * bar.atr, pair)
                 print(f"{bar.name}  BOS {b}  FVG {f}  FIB {x}")
-                stop = config.ATR_MULT_SL*bar.atr *1.6
-                pos  = dict(dir=-1, entry=bar.c,
-                        sl=bar.c+stop + config.WICK_BUFFER * bar.atr, tp=bar.c-config.ATR_MULT_TP*bar.atr,
+                pos  = dict(dir=-1, entry=entry,
+                        sl=sl, tp=tp,
                         risk=equity0*risk_pct, half=False,time_entry=idx, time_close=None)
 
         curve.append(equity)
@@ -209,4 +183,4 @@ if __name__ == "__main__":
     logging.info("LRS back‑test starting  %s", datetime.utcnow().strftime("%F %T"))
     hist = asyncio.run(preload_history(symbol=config.PAIR, interval=config.INTERVAL, limit=3000))
     hist_30d = hist[hist.index >= hist.index[-1] - pd.Timedelta(days=30)]
-    backtest(hist_30d)   # pass accessor
+    backtest(hist_30d, pair=config.PAIR)

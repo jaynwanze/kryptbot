@@ -16,7 +16,7 @@ async def backtest_one(pair: str) -> dict:
     """Load history for *pair*, slice the last DAYS and run the existing back‑test."""
     raw = await preload_history(symbol=pair, interval=config.INTERVAL, limit=BAR_LIMIT)
     lookback = raw[raw.index >= raw.index[-1] - timedelta(days=DAYS)]
-    summary = backtest(lookback)          # ← your original fn – returns dict
+    summary = backtest(lookback, pair)          # ← your original fn – returns dict
     summary["pair"] = pair
     return summary
 
