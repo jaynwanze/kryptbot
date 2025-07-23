@@ -83,8 +83,8 @@ def backtest(df: pd.DataFrame,
         # ---- look for new entry  -----------------------------------
         if pos is None:
             # inside the back‑test loop, **before** you call tjr_long/short_signal
-            four_h = df['c'].iloc[:i+1].resample('4h').last()
-            trend = four_h.pct_change().rolling(3).mean().abs().iloc[-1]
+            # four_h = df['c'].iloc[:i+1].resample('4h').last()
+            # trend = four_h.pct_change().rolling(3).mean().abs().iloc[-1]
             # if trend < 0.006:          # < 0.6 % move in the last 3 days ⇒ chop
             #         continue
             # if i % 4 == 0:          # print probe every 4th candle, not every one
@@ -98,6 +98,10 @@ def backtest(df: pd.DataFrame,
             vol_norm = bar.atr / bar.atr30
             min_adx  = 10 + 8 * vol_norm            
             atr_veto = 0.5 + 0.3 * vol_norm        
+
+            # Wide range veto - for multi pair stra
+              # min_adx  = 6 + 6 * vol_norm            
+            # atr_veto = 0.3 + 0.2 * vol_norm        
             if bar.adx < min_adx or bar.atr < atr_veto * bar.atr30:
                     continue 
             # distance between entry and SL
