@@ -1,5 +1,5 @@
 # -------- base image --------
-FROM python:3.10-slim-bullseye
+FROM python:3.11-slim
 
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1

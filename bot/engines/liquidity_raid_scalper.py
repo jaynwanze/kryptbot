@@ -4,7 +4,7 @@
 # ────────────────────────────────────────────────────────────────
 import os, json, asyncio, math, logging, time, traceback
 from   datetime import datetime, timezone
-from   typing   import Optional, Tuple
+from   typing   import List, Optional, Tuple
 
 import ccxt.async_support as ccxt
 import numpy  as np
@@ -13,9 +13,12 @@ import websockets
 from   telegram import Bot
 from   dotenv   import load_dotenv
 from telegram.utils.helpers import escape_markdown
-
- 
-from helpers import (
+from asyncio import Queue
+import sys, os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+from bot.infra.models import Signal, Position
+from bot.engines.risk_router import RiskRouter
+from bot.helpers import (
     config,
     compute_indicators,        # → ATR, ADX, Stoch, RSI, …
     build_htf_levels,          # 4‑hour / daily structure map
@@ -23,7 +26,7 @@ from helpers import (
     tjr_short_signal,  
     update_htf_levels_new,     # incremental HTF levels update        
 )
-from data import preload_history
+from bot.data import preload_history
 
 
 # ────────────────────────────────────────────────────────────────
@@ -49,14 +52,17 @@ REST     = ccxt.bybit({"enableRateLimit": True})
 TF_SEC   = int(config.INTERVAL) * 60          # 900 s for 15‑m
 MAX_RETRY = 3
 
+# ────────────────────────────────────────────────────────────────
+#  Pairs & history
+PAIRS: List[str] = ["SOLUSDT"]
+SIGNAL_Q: Queue = Queue(maxsize=100)
 
 
-def alert_side(bar: pd.Series, side: str) -> None:
-    stop_off = (config.ATR_MULT_SL * 1.6 + config.WICK_BUFFER) * bar.atr
+def alert_side(bar: pd.Series, side: str, stop_off: float, tp: float) -> None:
     if side == "LONG":
-        sl, tp, emoji = bar.c - stop_off, bar.c + config.ATR_MULT_TP * bar.atr, "📈"
+        sl, tp, emoji = bar.c - stop_off, bar.c + tp, "📈"
     else:
-        sl, tp, emoji = bar.c + stop_off, bar.c - config.ATR_MULT_TP * bar.atr, "📉"
+        sl, tp, emoji = bar.c + stop_off, bar.c - tp, "📉"
 
     msg_raw = (
         f"{emoji} *(LRS MULTI‑PAIR ENGINE)* {config.PAIR} {config.INTERVAL}m {side}\n"
@@ -76,13 +82,12 @@ def alert_side(bar: pd.Series, side: str) -> None:
         logging.error("[%s] Telegram error: %s", config.PAIR, exc)
 
 
-
 # ────────────────────────────────────────────────────────────────
 #  Web‑socket coroutine
 # ────────────────────────────────────────────────────────────────
-async def kline_stream() -> None:
+async def kline_stream(pair) -> None:
     # 1) Pull a chunk of history, build indicators & HTF context
-    hist = await preload_history(symbol=config.PAIR, interval=config.INTERVAL, limit=1000)           # 15‑min bars
+    hist = await preload_history(symbol=pair, interval=config.INTERVAL, limit=1000)           # 15‑min bars
     htf_levels   = build_htf_levels(hist.copy())
 
     logging.info("History pre‑loaded: %d bars (%s → %s)",
@@ -188,15 +193,23 @@ async def kline_stream() -> None:
                             config.PAIR, bar.k_fast, bar.adx, bar.atr)
                             continue 
                     
+                    stop_off = (config.ATR_MULT_SL * 1.6 + config.WICK_BUFFER) * bar.atr
+                    tp   = config.ATR_MULT_TP * bar.atr
                     if tjr_long_signal(hist, i, htf_row):
                         logging.info("Long‑signal %s  k_fast %.1f  adx %.1f",
                                      bar.name, bar.k_fast, bar.adx)
-                        alert_side(bar, "LONG")
+                        alert_side(bar, "LONG", stop_off=stop_off, tp=tp)
+                        sig = Signal(pair, "Buy", bar.c, sl=bar.c-stop_off, tp=bar.c+tp,
+                              key=f"{pair}-{bar.name:%H%M}", ts=bar.name)
+                        await SIGNAL_Q.put(sig)
 
                     elif tjr_short_signal(hist, i, htf_row):
                         logging.info("Short‑signal %s  k_fast %.1f  adx %.1f",
                                      bar.name, bar.k_fast, bar.adx)
-                        alert_side(bar, "SHORT")
+                        alert_side(bar, "SHORT", stop_off=stop_off, tp=tp)
+                        sig = Signal(pair, "Sell", bar.c, sl=bar.c+stop_off, tp=bar.c-tp,
+                              key=f"{pair}-{bar.name:%H%M}", ts=bar.name)
+                        await SIGNAL_Q.put(sig)
                     else:
                         if logging.getLogger().isEnabledFor(logging.INFO):
                             logging.info("No‑trade %s  k_fast %.1f  adx %.1f",
@@ -206,16 +219,25 @@ async def kline_stream() -> None:
             logging.error("WS stream error: %s\n%s", exc, traceback.format_exc())
             await asyncio.sleep(5)        # back‑off then reconnect
 
+async def main():
+    router = RiskRouter(equity_usd=200, testnet=True)
 
-# ───────────────────────────────── entry‑point ───────────────────────────────
+    # producer tasks
+    streams = [asyncio.create_task(kline_stream(p)) for p in PAIRS]
+
+    # consumer task
+    async def consume():
+        while True:
+            sig = await SIGNAL_Q.get()
+            try:
+                await router.handle(sig)
+            except Exception as e:
+                logging.error("Router error: %s", e)
+
+    streams.append(asyncio.create_task(consume()))
+    await asyncio.gather(*streams)
+
+
+# # ───────────────────────────────── entry‑point ───────────────────────────────
 if __name__ == "__main__":
-    logging.info("SOL/USDT(LONGS) TJR 15‑m signal bot starting  %s", datetime.utcnow())
-    try:
-        asyncio.run(kline_stream())
-    finally:
-        # ensure REST client closes cleanly
-        try:
-            asyncio.get_event_loop().run_until_complete(REST.close())
-        except Exception:
-            pass
-
+    asyncio.run(main())
