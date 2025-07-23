@@ -76,8 +76,8 @@ class RiskRouter:
                 self.http.set_leverage,
                 category="linear",
                 symbol=symbol,
-                buyLeverage=config.LEV,
-                sellLeverage=config.LEV,
+                buyLeverage=config.LEVERAGE,
+                sellLeverage=config.LEVERAGE,
             )
             self._leveraged.add(symbol)
 
