@@ -8,9 +8,6 @@ services:
     command: python -m bot.engines.liquidity_raid_scalper
     container_name: krypt_scalper
     env_file: .env                  # TELE_TOKEN, TG_CHAT_ID, …
-    environment:
-      - BYBIT_KEY_TEST=${BYBIT_KEY_TEST}
-      - BYBIT_SECRET_TEST=${BYBIT_SECRET_TEST}
     restart: unless-stopped
     logging:
       driver: "json-file"
@@ -23,9 +20,6 @@ services:
     command: python -m bot.engines.lrs_pair_engine
     container_name: krypt_pair
     env_file: .env
-    environment:
-      - BYBIT_KEY_TEST=${BYBIT_KEY_TEST}
-      - BYBIT_SECRET_TEST=${BYBIT_SECRET_TEST}
     restart: unless-stopped
     logging:
       driver: "json-file"

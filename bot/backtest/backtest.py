@@ -48,9 +48,13 @@ def backtest(df: pd.DataFrame,
         if bar[["atr", "adx", "k_fast"]].isna().any():
             curve.append(equity); continue     # still warming up
         
-        # ---- update HTF levels  -----------------------------------
+        idx_prev = htf_levels.index.get_indexer([bar.name], method="ffill")[0]
+        if idx_prev == -1:           # HTF table still warming‑up
+                curve.append(equity)
+                continue                 # only the very first few bars
+
         try:
-            htf_levels = update_htf_levels_new(htf_levels, bar)
+            # htf_levels = update_htf_levels_new(htf_levels, bar)
             htf_row = htf_levels.loc[bar.name]
         except KeyError:
             curve.append(equity); continue     # HTF still warming up
@@ -139,7 +143,7 @@ def backtest(df: pd.DataFrame,
 
         curve.append(equity)
         # ---- update HTF levels  -----------------------------------
-        # htf_levels = update_htf_levels_new(htf_levels, bar)
+        htf_levels = update_htf_levels_new(htf_levels, bar)
 
     # ------------- final statistics ---------------------------------
     wins  = sum(1 for t in trades if t["pnl"] > 0)

@@ -165,7 +165,7 @@ async def kline_stream(pair) -> None:
                         logging.info("Warm‑up already satisfied – live trading ENABLED")
 
                     bar = hist.iloc[-1]
-                    if bar[["atr","adx","k_fast"]].isna().any():
+                    if bar[["atr","atr30","adx","k_fast"]].isna().any():
                         continue  # indicator NA guard
                     # higher‑TF context
                     try:

@@ -13,9 +13,10 @@ import websockets
 from   telegram import Bot
 from   dotenv   import load_dotenv
 from telegram.utils.helpers import escape_markdown
+import sys, os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
-
-from helpers import (
+from bot.helpers import (
     config,
     compute_indicators,
     build_htf_levels,
@@ -23,7 +24,7 @@ from helpers import (
     tjr_short_signal,
     update_htf_levels_new,
 )
-from data import preload_history
+from bot.data import preload_history
 
 
 # ───────── misc constants (shared across pairs) ─────────
@@ -153,11 +154,16 @@ async def kline_stream(pair: str) -> None:
 
                     # indicator guard
                     bar = hist.iloc[-1]
-                    if bar[["atr","adx","k_fast"]].isna().any():
+                    if bar[["atr","atr30","adx","k_fast"]].isna().any():
                         continue
+                   # -------- look‑up HTF snapshot (allow forward‑fill) --------------
                     try:
-                        htf_row = htf_levels.loc[bar.name]
-                    except KeyError:
+                    # nearest index *≤ bar.name*; raises KeyError if the table is still empty
+                        idx_prev = htf_levels.index.get_indexer([bar.name], method="ffill")[0]
+                        if idx_prev == -1:          # HTF table still warming‑up
+                            continue
+                        htf_row = htf_levels.iloc[idx_prev]
+                    except (KeyError, IndexError):
                         continue
 
                     # adx & volatility veto
