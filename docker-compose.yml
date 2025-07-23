@@ -9,6 +9,8 @@ services:
     container_name: krypt_scalper
     env_file: .env                  # TELE_TOKEN, TG_CHAT_ID, …
     restart: unless-stopped
+    volumes:
+      - .:/app                      # mount the current directory to /app in the container
     logging:
       driver: "json-file"
       options:
@@ -21,6 +23,8 @@ services:
     container_name: krypt_pair
     env_file: .env
     restart: unless-stopped
+    volumes:
+      - .:/app                      # mount the current directory to /app in the container
     logging:
       driver: "json-file"
       options:
