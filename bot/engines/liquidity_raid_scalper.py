@@ -64,7 +64,7 @@ def alert_side(bar: pd.Series, side: str, stop_off: float, tp: float) -> None:
         sl, tp, emoji = bar.c + stop_off, bar.c - tp, "📉"
 
     msg_raw = (
-        f"{emoji} *(LRS MULTI‑PAIR ENGINE)* {config.PAIR} {config.INTERVAL}m {side}\n"
+        f"{emoji} *(LRS-SOL-LONG-ENGINE)* {config.PAIR} {config.INTERVAL}m {side}\n"
         f"`{bar.name:%Y-%m-%d %H:%M}` UTC\n"
         f"Entry  : `{bar.c:.3f}`\n"
         f"Stop   : `{sl:.3f}`\n"
