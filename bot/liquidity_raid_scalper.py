@@ -12,6 +12,8 @@ import pandas as pd
 import websockets
 from   telegram import Bot
 from   dotenv   import load_dotenv
+from telegram.utils.helpers import escape_markdown
+
  
 from helpers import (
     config,
@@ -61,18 +63,17 @@ def alert_side(bar: pd.Series, side: str) -> None:
         tp = bar.c - config.ATR_MULT_TP * bar.atr
         emoji = "📉"
 
-    msg = (
-        "*LRS MULTI PAIR ENGINE LIVE TRADING BOT*\n"          # open + close
-        f"{emoji} *{config.PAIR} {config.INTERVAL}‑m {side} signal*\n"
-        f"`{bar.name:%Y‑%m-%d %H:%M}` UTC\n"
-        f"Entry  : `{bar.c:.3f}`\n"
-        f"Stop   : `{sl:.3f}`\n"
-        f"Target : `{tp:.3f}`\n"
-        f"ADX    : `{bar.adx:.1f}`  |  StochK: `{bar.k_fast:.1f}`"
+    msg_raw = (
+    f"{emoji} *(LRS MULTI-PAIR ENGINE)* {config.PAIR} {config.INTERVAL}m {side}*\n"
+    f"`{bar.name:%Y-%m-%d %H:%M}` UTC\n"
+    f"Entry  : `{bar.c:.3f}`\n"
+    f"Stop   : `{sl:.3f}`\n"
+    f"Target : `{tp:.3f}`\n"
+    f"ADX    : `{bar.adx:.1f}`  |  StochK: `{bar.k_fast:.1f}`"
     )
-
     try:
-        bot.send_message(chat_id=TG_CHAT_ID, text=msg, parse_mode="Markdown")
+        msg = escape_markdown(msg_raw, version=2)   # back‑slash everything unsafe
+        bot.send_message(TG_CHAT_ID, msg, parse_mode="MarkdownV2")
         logging.info("Telegram alert sent: %s %s", side, bar.name)
     except Exception as exc:
         logging.error("Telegram error: %s", exc)

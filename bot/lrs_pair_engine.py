@@ -12,6 +12,8 @@ import pandas as pd
 import websockets
 from   telegram import Bot
 from   dotenv   import load_dotenv
+from telegram.utils.helpers import escape_markdown
+
 
 from helpers import (
     config,
@@ -24,7 +26,7 @@ from helpers import (
 from data import preload_history
 
 # ───────── pairs you want to trade concurrently ─────────
-PAIRS: List[str] = ["SOLUSDT", "ATOMUSDT", "WAVESUSDT", "XRPUSDT"]
+PAIRS: List[str] = ["SOLUSDT", "ETHUSDT", "ATOMUSDT", "WAVESUSDT", "XRPUSDT"]
 
 # ───────── misc constants (shared across pairs) ─────────
 TF         = config.INTERVAL           # "15"  …minutes
@@ -32,7 +34,10 @@ TF_SEC     = int(TF) * 60
 LOOKBACK   = 1_000                     # bars per pair
 MAX_RETRY  = 3
 WS_URL     = "wss://stream.bybit.com/v5/public/linear"
-PING_SEC   = 20                        # WS heartbeat
+PING_SEC   = 20     
+
+ # Indicator warm‑up
+MAX_PERIODS = 200  # longest MA / oscillator period + cushion
 
 # ───────── Telegram  ─────────
 load_dotenv()
@@ -55,17 +60,17 @@ def alert_side(pair: str, bar: pd.Series, side: str) -> None:
         tp = bar.c - config.ATR_MULT_TP * bar.atr
         emoji = "📉"
 
-    msg = (
-        "*LRS MULTI PAIR ENGINE LIVE TRADING BOT*\n"
-        f"{emoji} *{pair} {TF}‑m {side} signal*\n"
-        f"`{bar.name:%Y‑%m‑%d %H:%M}` UTC\n"
-        f"Entry  : `{bar.c:.4f}`\n"
-        f"Stop   : `{sl:.4f}`\n"
-        f"Target : `{tp:.4f}`\n"
-        f"ADX    : `{bar.adx:.1f}`  |  StochK: `{bar.k_fast:.1f}`"
-    )
+    msg_raw = (
+    f"{emoji} *(LRS MULTI-PAIR ENGINE)* {config.PAIR} {config.INTERVAL}m {side}*\n"
+    f"`{bar.name:%Y-%m-%d %H:%M}` UTC\n"
+    f"Entry  : `{bar.c:.3f}`\n"
+    f"Stop   : `{sl:.3f}`\n"
+    f"Target : `{tp:.3f}`\n"
+    f"ADX    : `{bar.adx:.1f}`  |  StochK: `{bar.k_fast:.1f}`"
+)
     try:
-        bot.send_message(chat_id=TG_CHAT_ID, text=msg, parse_mode="Markdown")
+        msg = escape_markdown(msg_raw, version=2)   # back‑slash everything unsafe
+        bot.send_message(TG_CHAT_ID, msg, parse_mode="MarkdownV2")
         logging.info("Telegram alert sent  – %s  %s", pair, side)
     except Exception as exc:
         logging.error("Telegram error: %s", exc)
@@ -147,6 +152,9 @@ async def kline_stream(pair: str) -> None:
                     hist = pd.concat([hist, new]).tail(LOOKBACK)
                     hist = compute_indicators(hist)
 
+                    if len(hist) >= MAX_PERIODS:
+                        logging.info("Warm‑up already satisfied – live trading ENABLED")
+
                     # indicator guard
                     bar = hist.iloc[-1]
                     if bar[["atr","adx","k_fast"]].isna().any():
@@ -158,10 +166,10 @@ async def kline_stream(pair: str) -> None:
 
                     # adx & volatility veto
                     vol_norm = bar.atr / bar.atr30
-                    if bar.adx < 10 + 8*vol_norm:
-                        continue
-                    if bar.atr < (0.5 + 0.3*vol_norm) * bar.atr30:
-                        continue
+                    min_adx  = 10 + 8 * vol_norm            
+                    atr_veto = 0.5 + 0.3 * vol_norm        
+                    if bar.adx < min_adx or bar.atr < atr_veto * bar.atr30:
+                        continue 
 
                     i = len(hist) - 1
                     if tjr_long_signal(hist, i, htf_row):
