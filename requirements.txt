@@ -11,3 +11,6 @@ ccxt>=4.0
 # messaging & env
 python-telegram-bot==13.*
 python-dotenv
+
+#bybit
+pybit==5.*

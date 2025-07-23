@@ -1,5 +1,5 @@
 import pandas as pd
-import helpers.config as config
+import bot.helpers.config as config
 HTF_WINDOW = f"{config.HTF_DAYS}D"          # e.g. '15D'
 
 

@@ -1,6 +1,6 @@
 from typing import Optional, Tuple
-from helpers.config import ADX_FLOOR
-from helpers import ltf
+from bot.helpers import config
+from bot.helpers import ltf
 import pandas as pd
 
 def raid_happened(bar, htf_row) -> Tuple[bool, str]:

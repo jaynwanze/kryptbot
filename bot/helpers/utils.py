@@ -1,5 +1,5 @@
 import math
-from helpers import config
+from bot.helpers import config
 import logging
 import pandas as pd
 from telegram import Bot
