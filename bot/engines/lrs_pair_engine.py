@@ -25,8 +25,6 @@ from helpers import (
 )
 from data import preload_history
 
-# ───────── pairs you want to trade concurrently ─────────
-PAIRS: List[str] = ["SOLUSDT", "ETHUSDT", "ATOMUSDT", "WAVESUSDT", "XRPUSDT"]
 
 # ───────── misc constants (shared across pairs) ─────────
 TF         = config.INTERVAL           # "15"  …minutes
@@ -199,7 +197,7 @@ async def main() -> None:
     logging.info("Multi‑pair engine starting  %s", datetime.utcnow().strftime("%F %T"))
 
     # spawn one WS task per pair
-    tasks = [asyncio.create_task(kline_stream(p)) for p in PAIRS]
+    tasks = [asyncio.create_task(kline_stream(p)) for p in config.PAIRS_LRS_MULTI]
     await asyncio.gather(*tasks)
 
 if __name__ == "__main__":

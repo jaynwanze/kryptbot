@@ -1,6 +1,9 @@
 # ────────────────────────────────────────────────────────────────
 #  Configuration
 # ────────────────────────────────────────────────────────────────
+from typing import List
+
+
 PAIR            = "SOLUSDT"          # Bybit symbol: SOL/ATOM/WAVES/XRP
 TF_SECONDS      = 15 * 60            # 15‑minute bars
 INTERVAL        = "15"               # stream interval, string
@@ -34,3 +37,7 @@ TICK_SIZE = {           # expand as needed
     "XRPUSDT": 0.0001,
     "ETHUSDT": 0.01,
 }
+# ────────────────────────────────────────────────────────────────
+#  Pairs & history
+PAIRS_LRS: List[str] = ["SOLUSDT"]
+PAIRS_LRS_MULTI: List[str] = ["SOLUSDT", "ETHUSDT", "ATOMUSDT", "WAVESUSDT", "XRPUSDT"]

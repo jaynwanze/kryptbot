@@ -53,8 +53,7 @@ TF_SEC   = int(config.INTERVAL) * 60          # 900 s for 15‑m
 MAX_RETRY = 3
 
 # ────────────────────────────────────────────────────────────────
-#  Pairs & history
-PAIRS: List[str] = ["SOLUSDT"]
+#  Signal queue
 SIGNAL_Q: Queue = Queue(maxsize=100)
 
 
@@ -223,7 +222,7 @@ async def main():
     router = RiskRouter(equity_usd=200, testnet=True)
 
     # producer tasks
-    streams = [asyncio.create_task(kline_stream(p)) for p in PAIRS]
+    streams = [asyncio.create_task(kline_stream(p)) for p in config.PAIRS_LRS]
 
     # consumer task
     async def consume():

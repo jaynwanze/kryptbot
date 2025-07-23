@@ -3,8 +3,8 @@ from pybit.unified_trading import HTTP, WebSocket
 import os, time, hmac, hashlib
 
 def get_client(testnet: bool = True) -> HTTP:
-    key = os.getenv("BYBIT_SECRET_TEST" if testnet else "BYBIT_KEY")
-    sec = os.getenv("BYBIT_SECRET_TEST" if testnet else "BYBIT_SEC")
+    key = os.getenv("BYBIT_KEY_TEST" if testnet else "BYBIT_KEY")
+    sec = os.getenv("BYBIT_SECRET_TEST" if testnet else "BYBIT_SECRET")
     return HTTP(
         testnet=testnet,
         api_key=key,
