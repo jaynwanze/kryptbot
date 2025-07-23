@@ -1,7 +1,7 @@
 import asyncio
 import requests
 import pandas as pd
-from helpers import config, compute_indicators
+from bot.helpers import config, compute_indicators
 
 async def preload_history(symbol:str, interval:str, limit: int = 1000) -> pd.DataFrame:
     """
