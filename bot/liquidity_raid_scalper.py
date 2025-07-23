@@ -52,31 +52,29 @@ MAX_RETRY = 3
 
 
 def alert_side(bar: pd.Series, side: str) -> None:
-    """Send a nicely‑formatted alert to Telegram."""
     stop_off = (config.ATR_MULT_SL * 1.6 + config.WICK_BUFFER) * bar.atr
     if side == "LONG":
-        sl = bar.c - stop_off
-        tp = bar.c + config.ATR_MULT_TP * bar.atr
-        emoji = "📈"
-    else:  # SHORT
-        sl = bar.c + stop_off
-        tp = bar.c - config.ATR_MULT_TP * bar.atr
-        emoji = "📉"
+        sl, tp, emoji = bar.c - stop_off, bar.c + config.ATR_MULT_TP * bar.atr, "📈"
+    else:
+        sl, tp, emoji = bar.c + stop_off, bar.c - config.ATR_MULT_TP * bar.atr, "📉"
 
     msg_raw = (
-    f"{emoji} *(LRS MULTI-PAIR ENGINE)* {config.PAIR} {config.INTERVAL}m {side}*\n"
-    f"`{bar.name:%Y-%m-%d %H:%M}` UTC\n"
-    f"Entry  : `{bar.c:.3f}`\n"
-    f"Stop   : `{sl:.3f}`\n"
-    f"Target : `{tp:.3f}`\n"
-    f"ADX    : `{bar.adx:.1f}`  |  StochK: `{bar.k_fast:.1f}`"
+        f"{emoji} *(LRS MULTI‑PAIR ENGINE)* {config.PAIR} {config.INTERVAL}m {side}\n"
+        f"`{bar.name:%Y-%m-%d %H:%M}` UTC\n"
+        f"Entry  : `{bar.c:.3f}`\n"
+        f"Stop   : `{sl:.3f}`\n"
+        f"Target : `{tp:.3f}`\n"
+        f"ADX    : `{bar.adx:.1f}` | StochK: `{bar.k_fast:.1f}`"
     )
+
     try:
-        msg = escape_markdown(msg_raw, version=2)   # back‑slash everything unsafe
-        bot.send_message(TG_CHAT_ID, msg, parse_mode="MarkdownV2")
-        logging.info("Telegram alert sent: %s %s", side, bar.name)
+        bot.send_message(TG_CHAT_ID,
+                         escape_markdown(msg_raw, version=2),
+                         parse_mode="MarkdownV2")
+        logging.info("[%s] Telegram alert sent (%s)", config.PAIR, side)
     except Exception as exc:
-        logging.error("Telegram error: %s", exc)
+        logging.error("[%s] Telegram error: %s", config.PAIR, exc)
+
 
 
 # ────────────────────────────────────────────────────────────────
@@ -186,6 +184,8 @@ async def kline_stream() -> None:
                     min_adx  = 10 + 8 * vol_norm            
                     atr_veto = 0.5 + 0.3 * vol_norm        
                     if bar.adx < min_adx or bar.atr < atr_veto * bar.atr30:
+                            logging.info("[%s] No‑trade (veto)  k_fast %.1f  adx %.1f  atr %.4f",
+                            config.PAIR, bar.k_fast, bar.adx, bar.atr)
                             continue 
                     
                     if tjr_long_signal(hist, i, htf_row):
@@ -197,9 +197,10 @@ async def kline_stream() -> None:
                         logging.info("Short‑signal %s  k_fast %.1f  adx %.1f",
                                      bar.name, bar.k_fast, bar.adx)
                         alert_side(bar, "SHORT")
-                    elif logging.getLogger().isEnabledFor(logging.INFO):
-                        logging.info("No‑trade %s  k_fast %.1f  adx %.1f",
-                                     bar.name, bar.k_fast, bar.adx)                   
+                    else:
+                        if logging.getLogger().isEnabledFor(logging.INFO):
+                            logging.info("No‑trade %s  k_fast %.1f  adx %.1f",
+                                         bar.name, bar.k_fast, bar.adx)
 
         except Exception as exc:
             logging.error("WS stream error: %s\n%s", exc, traceback.format_exc())
