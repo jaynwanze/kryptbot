@@ -1,14 +1,14 @@
 import sys
-import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+import sys, os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 import asyncio
 import logging
 from datetime import datetime
 import pandas as pd
 import sys
-from helpers import config,build_htf_levels, tjr_long_signal, tjr_short_signal, update_htf_levels_new,ltf,round_price,alert_side
-from data import preload_history
+from bot.helpers import config,build_htf_levels, tjr_long_signal, tjr_short_signal, update_htf_levels_new,ltf,round_price,alert_side
+from bot.data import preload_history
 
 LOOKBACK_BARS = 1_000       # keep history light
 GOOD_HOURS = config.SESSION_WINDOWS.get("asia", []) + \
@@ -50,6 +50,7 @@ def backtest(df: pd.DataFrame,
         
         # ---- update HTF levels  -----------------------------------
         try:
+            htf_levels = update_htf_levels_new(htf_levels, bar)
             htf_row = htf_levels.loc[bar.name]
         except KeyError:
             curve.append(equity); continue     # HTF still warming up
@@ -138,7 +139,7 @@ def backtest(df: pd.DataFrame,
 
         curve.append(equity)
         # ---- update HTF levels  -----------------------------------
-        htf_levels = update_htf_levels_new(htf_levels, bar)
+        # htf_levels = update_htf_levels_new(htf_levels, bar)
 
     # ------------- final statistics ---------------------------------
     wins  = sum(1 for t in trades if t["pnl"] > 0)

@@ -5,9 +5,12 @@ services:
   lrs_scalper:
     build: .
     image: kryptbot:latest          # built from the Dockerfile in repo root
-    command: python -m bot.liquidity_raid_scalper
+    command: python -m bot.engines.liquidity_raid_scalper
     container_name: krypt_scalper
     env_file: .env                  # TELE_TOKEN, TG_CHAT_ID, …
+    environment:
+      - BYBIT_KEY_TEST=${BYBIT_KEY_TEST}
+      - BYBIT_SECRET_TEST=${BYBIT_SECRET_TEST}
     restart: unless-stopped
     logging:
       driver: "json-file"
@@ -17,9 +20,12 @@ services:
 
   lrs_pair_engine:
     image: kryptbot:latest          # reuse the same layer‑cached image
-    command: python -m bot.lrs_pair_engine
+    command: python -m bot.engines.lrs_pair_engine
     container_name: krypt_pair
     env_file: .env
+    environment:
+      - BYBIT_KEY_TEST=${BYBIT_KEY_TEST}
+      - BYBIT_SECRET_TEST=${BYBIT_SECRET_TEST}
     restart: unless-stopped
     logging:
       driver: "json-file"
