@@ -3,6 +3,7 @@ version: "3.9"
 
 services:
   lrs_pair_engine:
+    build: .
     image: kryptbot:latest          # reuse the same layer‑cached image
     command: python -m bot.engines.lrs_pair_engine
     container_name: krypt_pair
