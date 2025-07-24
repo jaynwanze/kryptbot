@@ -12,7 +12,7 @@ LOOKBACK_BARS   = 800                # kept in memory (≈ 8 days)
 # Strategy param
 RISK_PCT        = 0.20               # not used (alerts only)
 STAKE_SIZE_USD   = 1_000          # ‘cash you allocate’ per entry
-LEVERAGE         = 25
+LEVERAGE         = 1
 ATR_MULT_SL     = 1       
 ATR_MULT_TP     = 2     # RR 2:1
 WICK_BUFFER     = 0.25               # extra ATR cushion
