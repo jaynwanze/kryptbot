@@ -112,7 +112,7 @@ async def kline_stream(pair) -> None:
                                 hist = (pd.concat([hist, df_miss])
                                           .drop_duplicates()
                                           .sort_index()
-                                          .tail(config.LOOKBACK))
+                                          .tail(LOOKBACK))
                                 break
                             except Exception as e:
                                 logging.error("REST back‑fill error: %s", e)
@@ -129,7 +129,7 @@ async def kline_stream(pair) -> None:
                                          float(kline["volume"])]],
                                        columns=["ts","o","h","l","c","v"]).set_index("ts")
 
-                    hist = pd.concat([hist, new]).tail(config.LOOKBACK)
+                    hist = pd.concat([hist, new]).tail(LOOKBACK)
                     hist = compute_indicators(hist)
 
                     if len(hist) >= MAX_PERIODS:
