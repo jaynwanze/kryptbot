@@ -2,21 +2,6 @@
 version: "3.9"
 
 services:
-  lrs_scalper:
-    build: .
-    image: kryptbot:latest          # built from the Dockerfile in repo root
-    command: python -m bot.engines.liquidity_raid_scalper
-    container_name: krypt_scalper
-    env_file: .env                  # TELE_TOKEN, TG_CHAT_ID, …
-    restart: unless-stopped
-    volumes:
-      - .:/app                      # mount the current directory to /app in the container
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
   lrs_pair_engine:
     image: kryptbot:latest          # reuse the same layer‑cached image
     command: python -m bot.engines.lrs_pair_engine
