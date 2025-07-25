@@ -175,9 +175,9 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                             continue
                         logging.info("[%s] LONG signal  %.1f/%.1f", pair, bar.k_fast, bar.adx)
                         logging.info("Entry|TP|SL  %.1f/%.1f/%.1f", bar.c, tp, stop_off)
-                        telegram.alert_side(pair, bar, TF, "LONG", stop_off=stop_off, tp=tp)
+                        telegram.alert_side(pair, bar, TF, "LONG", stop_off=stop_off, tp=tp, header=header)
                         sig = Signal(pair, "Buy", bar.c, sl=bar.c-stop_off, tp=bar.c+tp,
-                              key=f"{pair}-{bar.name:%H%M}", ts=bar.name, header=header)
+                              key=f"{pair}-{bar.name:%H%M}", ts=bar.name)
                         await SIGNAL_Q.put(sig)
 
                     elif tjr_short_signal(hist, i, htf_row):
@@ -186,9 +186,9 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                             continue
                         logging.info("[%s] SHORT signal %.1f/%.1f", pair, bar.k_fast, bar.adx)
                         logging.info("Entry|TP|SL  %.1f/%.1f/%.1f", bar.c, tp, stop_off)
-                        telegram.alert_side(pair, bar, TF, "SHORT", stop_off=stop_off, tp=tp)
+                        telegram.alert_side(pair, bar, TF, "SHORT", stop_off=stop_off, tp=tp, header=header)
                         sig = Signal(pair, "Sell", bar.c, sl=bar.c+stop_off, tp=bar.c-tp,
-                              key=f"{pair}-{bar.name:%H%M}", ts=bar.name, header=header)
+                              key=f"{pair}-{bar.name:%H%M}", ts=bar.name)
                         await SIGNAL_Q.put(sig)
                     else:
                         if logging.getLogger().isEnabledFor(logging.INFO):
