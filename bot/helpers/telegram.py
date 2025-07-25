@@ -10,7 +10,7 @@ TG_TOKEN   = os.getenv("TELE_TOKEN")
 TG_CHAT_ID = int(os.getenv("TG_CHAT_ID"))
 bot        = Bot(token=TG_TOKEN)
 
-async def alert_side(pair: str, timeframe: str, bar: pd.Series, side: str, stop_off: float, tp: float, header: str = "LRS MULTI-PAIR Engine") -> None:
+def alert_side(pair: str, bar: pd.Series, timeframe: str,  side: str, stop_off: float, tp: float, header: str = "LRS MULTI-PAIR Engine") -> None:
     if side == "LONG":
         sl, tp, emoji = bar.c - stop_off, bar.c + tp, "📈"
     else:
@@ -26,7 +26,7 @@ async def alert_side(pair: str, timeframe: str, bar: pd.Series, side: str, stop_
     )
 
     try:
-        await bot.send_message(TG_CHAT_ID,
+        bot.send_message(TG_CHAT_ID,
                          escape_markdown(msg_raw, version=2),
                          parse_mode="MarkdownV2")
         logging.info("[%s] Telegram alert sent (%s)", pair, side)
