@@ -53,7 +53,7 @@ SIGNAL_Q: Queue = Queue(maxsize=100)
 # ────────────────────────────────────────────────────────────────
 #  Web‑socket coroutine
 # ────────────────────────────────────────────────────────────────
-async def kline_stream(pair) -> None:
+async def kline_stream(pair: str, router: RiskRouter) -> None:
     # WebSocket topic
     topic = f"kline.{TF}.{pair}"
     # Pull a chunk of history, build indicators & HTF context
@@ -170,6 +170,9 @@ async def kline_stream(pair) -> None:
                     tp   = config.ATR_MULT_TP * bar.atr
                     header = "LRS MULTI-PAIR Engine"
                     if tjr_long_signal(hist, i, htf_row):
+                        if router.has_open(pair):
+                            logging.info("[%s] No‑trade (already open)", pair)
+                            continue
                         logging.info("[%s] LONG signal  %.1f/%.1f", pair, bar.k_fast, bar.adx)
                         logging.info("Entry|TP|SL  %.1f/%.1f/%.1f", bar.c, tp, stop_off)
                         telegram.alert_side(pair, bar, TF, "LONG", stop_off=stop_off, tp=tp)
@@ -178,6 +181,9 @@ async def kline_stream(pair) -> None:
                         await SIGNAL_Q.put(sig)
 
                     elif tjr_short_signal(hist, i, htf_row):
+                        if router.has_open(pair):
+                            logging.info("[%s] No‑trade (already open)", pair)
+                            continue
                         logging.info("[%s] SHORT signal %.1f/%.1f", pair, bar.k_fast, bar.adx)
                         logging.info("Entry|TP|SL  %.1f/%.1f/%.1f", bar.c, tp, stop_off)
                         telegram.alert_side(pair, bar, TF, "SHORT", stop_off=stop_off, tp=tp)
@@ -199,7 +205,7 @@ async def main():
     router = RiskRouter(equity_usd=20, testnet=False)
 
     # producer tasks
-    streams = [asyncio.create_task(kline_stream(p)) for p in config.PAIRS_LRS]
+    streams = [asyncio.create_task(kline_stream(p, router)) for p in config.PAIRS_LRS]
 
     # consumer task
     async def consume():
