@@ -171,6 +171,7 @@ async def kline_stream(pair) -> None:
                     header = "LRS MULTI-PAIR Engine"
                     if tjr_long_signal(hist, i, htf_row):
                         logging.info("[%s] LONG signal  %.1f/%.1f", pair, bar.k_fast, bar.adx)
+                        logging.info("Entry|TP|SL  %.1f/%.1f/%.1f", bar.c, tp, stop_off)
                         telegram.alert_side(pair, bar, TF, "LONG", stop_off=stop_off, tp=tp)
                         sig = Signal(pair, "Buy", bar.c, sl=bar.c-stop_off, tp=bar.c+tp,
                               key=f"{pair}-{bar.name:%H%M}", ts=bar.name, header=header)
@@ -178,6 +179,7 @@ async def kline_stream(pair) -> None:
 
                     elif tjr_short_signal(hist, i, htf_row):
                         logging.info("[%s] SHORT signal %.1f/%.1f", pair, bar.k_fast, bar.adx)
+                        logging.info("Entry|TP|SL  %.1f/%.1f/%.1f", bar.c, tp, stop_off)
                         telegram.alert_side(pair, bar, TF, "SHORT", stop_off=stop_off, tp=tp)
                         sig = Signal(pair, "Sell", bar.c, sl=bar.c+stop_off, tp=bar.c-tp,
                               key=f"{pair}-{bar.name:%H%M}", ts=bar.name, header=header)
