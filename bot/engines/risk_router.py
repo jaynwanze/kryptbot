@@ -167,7 +167,7 @@ class RiskRouter:
         self.private_ws.exit()
         
     def has_open(self, symbol: str) -> bool:
-        return any(pos.sig.symbol == symbol for pos in self.book.values())
+        return any(pos.signal.symbol == symbol for pos in self.book.values())
 
     def open_for_key(self, key: str) -> bool:
         return key in self.book
