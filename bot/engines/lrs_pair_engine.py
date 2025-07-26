@@ -179,7 +179,10 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                         sig = Signal(pair, "Buy", bar.c, sl=bar.c-stop_off, tp=bar.c+tp,
                               key=f"{pair}-{bar.name:%H%M}", ts=bar.name)
                         await SIGNAL_Q.put(sig)
-
+#                         logging.info(
+#   "[PROBE %s] O=%.3f H=%.3f L=%.3f C=%.3f  ADX=%.1f ATR=%.4f ATR30=%.4f k=%.1f",
+#   bar.name, bar.o, bar.h, bar.l, bar.c, bar.adx, bar.atr, bar.atr30, bar.k_fast
+# )
                     elif tjr_short_signal(hist, i, htf_row):
                         if router.has_open(pair):
                             logging.info("[%s] No‑trade (already open)", pair)
@@ -190,6 +193,10 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                         sig = Signal(pair, "Sell", bar.c, sl=bar.c+stop_off, tp=bar.c-tp,
                               key=f"{pair}-{bar.name:%H%M}", ts=bar.name)
                         await SIGNAL_Q.put(sig)
+#                         logging.info(
+#   "[PROBE %s] O=%.3f H=%.3f L=%.3f C=%.3f  ADX=%.1f ATR=%.4f ATR30=%.4f k=%.1f",
+#   bar.name, bar.o, bar.h, bar.l, bar.c, bar.adx, bar.atr, bar.atr30, bar.k_fast
+# )
                     else:
                         if logging.getLogger().isEnabledFor(logging.INFO):
                             logging.info("[%s] No-trade(No signal) %s  k_fast %.1f  adx %.1f",

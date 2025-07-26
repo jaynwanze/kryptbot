@@ -36,8 +36,14 @@ TICK_SIZE = {           # expand as needed
     "WAVESUSDT": 0.0001,
     "XRPUSDT": 0.0001,
     "ETHUSDT": 0.01,
+    "CHZUSDT": 0.001,
+    "LINKUSDT": 0.001,
+    
 }
 # ────────────────────────────────────────────────────────────────
 #  Pairs & history
 PAIRS_LRS: List[str] = ["SOLUSDT"]
 PAIRS_LRS_MULTI: List[str] = ["SOLUSDT", "ETHUSDT", "ATOMUSDT", "WAVESUSDT", "XRPUSDT"]
+# execution realism
+SLIP_BPS = 0.001        #  bps of adverse slippage on entry
+FEE_BPS = 10         # 10 bps per side (taker ~0.05% each way? adjust)
