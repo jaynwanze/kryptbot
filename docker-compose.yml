@@ -9,6 +9,8 @@ services:
     container_name: krypt_pair
     env_file: .env
     restart: unless-stopped
+    environment:
+      - TZ=UTC
     volumes:
       - .:/app                      # mount the current directory to /app in the container
     logging:

@@ -19,7 +19,7 @@ import pandas as pd
 
 # --- knobs to mimic live fills ---
 STOP_FIRST = True         # if both TP & SL are hit in a candle, count SL first
-ENTRY_POLICY = "close"   # or "close"
+ENTRY_POLICY = "next_open"   # or "close"
 
 # def entry_px(df, i, pair, side, slip_bps):
 #     if ENTRY_POLICY == "close":
@@ -96,14 +96,13 @@ def backtest(df: pd.DataFrame,
                 if reason == "SL":
                     exit_px = pos.sl
                     pnl_gross = pos.dir * pos.qty * (exit_px - pos.entry)
-                    fee = fees_usd(pos.entry, exit_px, pos.qty, config.FEE_BPS)
-                    pnl = pnl_gross - fee
+                    # fee = fees_usd(pos.entry, exit_px, pos.qty, config.FEE_BPS)
+                    pnl = pnl_gross
                 else:
                      exit_px = pos.tp
                      pnl_gross = pos.dir * pos.qty * (exit_px - pos.entry)
-                     fee = fees_usd(pos.entry, exit_px, pos.qty, config.FEE_BPS)
-                     pnl = pnl_gross - fee
-                     equity += pnl
+                    #  fee = fees_usd(pos.entry, exit_px, pos.qty, config.FEE_BPS)
+                     pnl = pnl_gross
                      
                 equity += pnl
                 trades.append(dict(
@@ -127,7 +126,7 @@ def backtest(df: pd.DataFrame,
                 curve.append(equity)
                 htf_levels = update_htf_levels_new(htf_levels, bar)
                 continue
-            stop_off = (config.ATR_MULT_SL * 1.6 + config.WICK_BUFFER) * bar.atr
+            stop_off = (config.ATR_MULT_SL + config.SL_CUSHION + config.WICK_BUFFER) * bar.atr
             tp_dist = config.ATR_MULT_TP * bar.atr
             
             if tjr_long_signal(df, i, htf_row):

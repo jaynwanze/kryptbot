@@ -118,16 +118,19 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                                 logging.error("REST back‑fill error: %s", e)
                                 await asyncio.sleep(0.5)
                     last_ts = current_end  # move pointer
-
                   
-                    ts = datetime.fromtimestamp(current_end, tz=timezone.utc)
-                    new  = pd.DataFrame([[ts,
-                                         float(kline["open"]),
-                                         float(kline["high"]),
-                                         float(kline["low"]),
-                                         float(kline["close"]),
-                                         float(kline["volume"])]],
-                                       columns=["ts","o","h","l","c","v"]).set_index("ts")
+                   #(exact close boundary)
+                    start_ms = int(kline["start"])            # Bybit sends start/end in ms
+                    ts_close = pd.to_datetime(start_ms, unit="ms", utc=True) + pd.Timedelta(seconds=TF_SEC)
+
+                    new = (pd.DataFrame([[ts_close,
+                      float(kline["open"]),
+                      float(kline["high"]),
+                      float(kline["low"]),
+                      float(kline["close"]),
+                      float(kline["volume"])]],
+                    columns=["ts","o","h","l","c","v"])
+                    .set_index("ts"))
 
                     hist = pd.concat([hist, new]).tail(LOOKBACK)
                     hist = compute_indicators(hist)

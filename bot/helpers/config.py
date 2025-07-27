@@ -16,6 +16,7 @@ LEVERAGE         = 1
 ATR_MULT_SL     = 1       
 ATR_MULT_TP     = 2     # RR 2:1
 WICK_BUFFER     = 0.25               # extra ATR cushion
+SL_CUSHION      = 1.6                # extra cushion for SL (to avoid false hits)
 ADX_FLOOR       = 25
 STO_K_MIN_LONG  = 45
 STO_K_MIN_SHORT = 30
