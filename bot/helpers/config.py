@@ -12,7 +12,7 @@ LOOKBACK_BARS   = 800                # kept in memory (≈ 8 days)
 # Strategy param
 RISK_PCT        = 0.20               # not used (alerts only)
 STAKE_SIZE_USD   = 1_000          # ‘cash you allocate’ per entry
-LEVERAGE         = "1"
+LEVERAGE         = 20
 RR_TARGET         = 1.5
 ATR_MULT_SL       = 1.0
 SL_CUSHION_MULT   = 1.6     # was a hidden “1.6”; make it explicit & multiplicative
