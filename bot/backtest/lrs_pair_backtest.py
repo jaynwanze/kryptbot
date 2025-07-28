@@ -96,13 +96,13 @@ def backtest(df: pd.DataFrame,
                 if reason == "SL":
                     exit_px = pos.sl
                     pnl_gross = pos.dir * pos.qty * (exit_px - pos.entry)
-                    # fee = fees_usd(pos.entry, exit_px, pos.qty, config.FEE_BPS)
-                    pnl = pnl_gross
+                    fee = fees_usd(pos.entry, exit_px, pos.qty, config.FEE_BPS)
+                    pnl = pnl_gross- fee
                 else:
                      exit_px = pos.tp
                      pnl_gross = pos.dir * pos.qty * (exit_px - pos.entry)
-                    #  fee = fees_usd(pos.entry, exit_px, pos.qty, config.FEE_BPS)
-                     pnl = pnl_gross
+                     fee = fees_usd(pos.entry, exit_px, pos.qty, config.FEE_BPS)
+                     pnl = pnl_gross - fee
                      
                 equity += pnl
                 trades.append(dict(
