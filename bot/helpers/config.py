@@ -12,11 +12,11 @@ LOOKBACK_BARS   = 800                # kept in memory (≈ 8 days)
 # Strategy param
 RISK_PCT        = 0.20               # not used (alerts only)
 STAKE_SIZE_USD   = 1_000          # ‘cash you allocate’ per entry
-LEVERAGE         = 1
-ATR_MULT_SL     = 1       
-ATR_MULT_TP     = 2     # RR 2:1
-WICK_BUFFER     = 0.25               # extra ATR cushion
-SL_CUSHION      = 1.6                # extra cushion for SL (to avoid false hits)
+LEVERAGE         = "1"
+RR_TARGET         = 1.0
+ATR_MULT_SL       = 1.0
+SL_CUSHION_MULT   = 1.6     # was a hidden “1.6”; make it explicit & multiplicative
+WICK_BUFFER       = 0.25    # in ATR units              # extra cushion for SL (to avoid false hits)
 ADX_FLOOR       = 25
 STO_K_MIN_LONG  = 45
 STO_K_MIN_SHORT = 30

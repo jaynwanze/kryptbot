@@ -169,17 +169,19 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                             pair, bar.k_fast, bar.adx, bar.atr)
                             continue 
                     
-                    stop_off = (config.ATR_MULT_SL * 1.6 + config.WICK_BUFFER) * bar.atr
-                    tp   = config.ATR_MULT_TP * bar.atr
+                    sl_base   = config.ATR_MULT_SL * bar.atr
+                    stop_off  = config.SL_CUSHION_MULT * sl_base + config.WICK_BUFFER * bar.atr
+                    tp_dist   = config.RR_TARGET * stop_off       # ← exact 2:1
+                    ratio = tp_dist / stop_off
                     header = "LRS MULTI-PAIR Engine"
                     if tjr_long_signal(hist, i, htf_row):
                         if router.has_open(pair):
                             logging.info("[%s] No‑trade (already open)", pair)
                             continue
                         logging.info("[%s] LONG signal  %.1f/%.1f", pair, bar.k_fast, bar.adx)
-                        logging.info("Entry|TP|SL  %.1f/%.1f/%.1f", bar.c, tp, stop_off)
-                        telegram.alert_side(pair, bar, TF, "LONG", stop_off=stop_off, tp=tp, header=header)
-                        sig = Signal(pair, "Buy", bar.c, sl=bar.c-stop_off, tp=bar.c+tp,
+                        logging.info("Entry|TP|SL  %.1f/%.1f/%.1f", bar.c, tp_dist, stop_off)
+                        telegram.alert_side(pair, bar, TF, "LONG", stop_off=stop_off, tp=bar.c+tp_dist, header=header)
+                        sig = Signal(pair, "Buy", bar.c, sl=bar.c-stop_off, tp=bar.c+tp_dist,
                               key=f"{pair}-{bar.name:%H%M}", ts=bar.name)
                         await SIGNAL_Q.put(sig)
 #                         logging.info(
@@ -188,12 +190,12 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
 # )
                     elif tjr_short_signal(hist, i, htf_row):
                         if router.has_open(pair):
-                            logging.info("[%s] No‑trade (already open)", pair)
+                            logging.info("[%s] No-trade (already open)", pair)
                             continue
                         logging.info("[%s] SHORT signal %.1f/%.1f", pair, bar.k_fast, bar.adx)
-                        logging.info("Entry|TP|SL  %.1f/%.1f/%.1f", bar.c, tp, stop_off)
-                        telegram.alert_side(pair, bar, TF, "SHORT", stop_off=stop_off, tp=tp, header=header)
-                        sig = Signal(pair, "Sell", bar.c, sl=bar.c+stop_off, tp=bar.c-tp,
+                        logging.info("Entry|TP|SL  %.1f/%.1f/%.1f", bar.c, tp_dist, stop_off)
+                        telegram.alert_side(pair, bar, TF, "SHORT", stop_off=stop_off, tp=bar.c-tp_dist, header=header)
+                        sig = Signal(pair, "Sell", bar.c, sl=bar.c+stop_off, tp=bar.c-tp_dist,
                               key=f"{pair}-{bar.name:%H%M}", ts=bar.name)
                         await SIGNAL_Q.put(sig)
 #                         logging.info(

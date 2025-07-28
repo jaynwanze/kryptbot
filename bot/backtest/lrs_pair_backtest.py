@@ -126,9 +126,10 @@ def backtest(df: pd.DataFrame,
                 curve.append(equity)
                 htf_levels = update_htf_levels_new(htf_levels, bar)
                 continue
-            stop_off = (config.ATR_MULT_SL + config.SL_CUSHION + config.WICK_BUFFER) * bar.atr
-            tp_dist = config.ATR_MULT_TP * bar.atr
-            
+            sl_base   = config.ATR_MULT_SL * bar.atr
+            stop_off  = config.SL_CUSHION_MULT * sl_base + config.WICK_BUFFER * bar.atr
+            tp_dist   = config.RR_TARGET * stop_off       # ← exact 2:1 vs *your* stop math
+            ratio = tp_dist / stop_off
             if tjr_long_signal(df, i, htf_row):
                 side = "LONG"; dir_ = 1
                 entry = next_open_price(df, i, side, pair, config.SLIP_BPS)
@@ -140,7 +141,11 @@ def backtest(df: pd.DataFrame,
                                risk=risk_usd, time_entry=idx, time_close=None)
                 logging.info("[%s] %s signal @ %s | entry %.3f sl %.3f tp %.3f | adx %.1f k_fast %.1f",
              pair, side, idx, entry, sl, tp, bar.adx, bar.k_fast)
-
+                logging.info("[RATIO] atr=%.5f tp_dist=%.5f sl_dist=%.5f ratio=%.3f",
+             bar.atr,
+             tp_dist,
+             stop_off,
+             ratio)
             elif tjr_short_signal(df, i, htf_row):
                 side  = "SHORT"; dir_ = -1
                 entry = next_open_price(df, i, side, pair, config.SLIP_BPS)
@@ -153,8 +158,11 @@ def backtest(df: pd.DataFrame,
                time_entry=idx, time_close=None)
                 logging.info("[%s] %s signal @ %s | entry %.3f sl %.3f tp %.3f | adx %.1f k_fast %.1f",
              pair, side, idx, entry, sl, tp, bar.adx, bar.k_fast)
-
-
+                logging.info("[RATIO] atr=%.5f tp_dist=%.5f sl_dist=%.5f ratio=%.3f",
+             bar.atr,
+             tp_dist,
+             stop_off,
+             ratio)
                 # optional debug
                 # b = ltf.is_bos(df, i, "long" if side==1 else "short")
                 # f = ltf.has_fvg(df, i-1, "long" if side==1 else "short")
@@ -176,7 +184,7 @@ def backtest(df: pd.DataFrame,
     summary = dict(
         pair=pair, trades=total, wins=wins, losses=losses,
         win_rate=(wins/total) if total else 0.0, profit_factor=pf,
-        equity_final=equity, rr=f"{config.ATR_MULT_TP}:{config.ATR_MULT_SL}",
+        equity_final=equity, rr=f"{config.RR_TARGET}:{config.ATR_MULT_SL}",
         risk_pct=risk_pct
     )
     return summary, trades, pd.Series(curve, index=df.index[:len(curve)])
