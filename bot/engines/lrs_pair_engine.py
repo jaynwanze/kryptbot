@@ -50,6 +50,10 @@ LOOKBACK   = 1_000                     # bars per pair
 #  Signal queue
 SIGNAL_Q: Queue = Queue(maxsize=100)
 
+#  cool-down period after a position is closed
+COOL_DOWN_BARS = 4                # 4 × 15 min  = 1 hour
+COOL_DOWN_SEC  = COOL_DOWN_BARS * TF_SEC
+
 # ────────────────────────────────────────────────────────────────
 #  Web‑socket coroutine
 # ────────────────────────────────────────────────────────────────
@@ -141,6 +145,14 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                     bar = hist.iloc[-1]
                     if bar[["atr","atr30","adx","k_fast"]].isna().any():
                         continue  # indicator NA guard
+
+                    # Cool‑down guard – only after a *StopLoss*
+                    last_sl = router.last_sl_ts.get(pair, 0)
+                    if last_sl and time.time() - last_sl < COOL_DOWN_SEC:
+                            remaining = int(COOL_DOWN_SEC - (time.time() - last_sl))
+                            logging.info("[%s] Cool‑down %ds left after last SL – no entry", pair, remaining)
+                            continue
+                        
                     # higher‑TF context
                     try:
                         # nearest index *≤ bar.name*; raises KeyError if the table is still empty

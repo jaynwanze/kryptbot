@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import logging
 import math
 from collections import defaultdict
@@ -48,6 +49,7 @@ class RiskRouter:
         self._lev_min:   Dict[str, float] = {}
         self._lev_max:   Dict[str, float] = {}
         self._leveraged: set[str] = set()
+        self.last_sl_ts: dict[str, float] = defaultdict(float)
 
         # working state
         self.book: dict[str, Position] = {}
@@ -280,10 +282,20 @@ class RiskRouter:
 
                 if status == "Filled":
                     logging.info("[%s] order %s filled", symbol, oid)
-                    # clear on reduce-only fills (TP/SL)
-                    reduce_only = str(row.get("reduceOnly", "false")).lower() == "true"
-                    if reduce_only:
-                        self._clear_symbol(symbol, reason="reduceOnly fill")
+
+                # was this a reduce‑only bracket (TP / SL) … or the market entry?
+                reduce_only = str(row.get("reduceOnly", "false")).lower() == "true"
+                tp_sl_type  = (row.get("tpSlOrderType") or "").lower()  # "stoploss" / "takeprofit" / ""
+
+                if reduce_only:                       # <<< guard starts
+                    if tp_sl_type == "stoploss":      # start cool‑down if it was the SL
+                        self.last_sl_ts[symbol] = time.time()
+
+                 # safe to wipe local book – *only* the exit leg sets reduceOnly
+                    self._clear_symbol(
+                    symbol,
+                    reason=f"reduceOnly {tp_sl_type or 'bracket‑fill'}"
+                  )                        
 
                 elif status in ("Cancelled", "Rejected"):
                     logging.warning("[%s] order %s %s", symbol, oid, status)
