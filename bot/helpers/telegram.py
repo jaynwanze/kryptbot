@@ -10,11 +10,11 @@ TG_TOKEN   = os.getenv("TELE_TOKEN")
 TG_CHAT_ID = int(os.getenv("TG_CHAT_ID"))
 bot        = Bot(token=TG_TOKEN)
 
-def alert_side(pair: str, bar: pd.Series, timeframe: str,  side: str, stop_off: float, tp: float, header: str = "LRS MULTI-PAIR Engine") -> None:
+def alert_side(pair: str, bar: pd.Series, timeframe: str,  side: str, stop_off: float, tp_dist: float, header: str = "LRS MULTI-PAIR Engine") -> None:
     if side == "LONG":
-        sl, tp, emoji = bar.c - stop_off, bar.c + tp, "📈"
+        sl, tp, emoji = bar.c - stop_off, bar.c + tp_dist, "📈"
     else:
-        sl, tp, emoji = bar.c + stop_off, bar.c - tp, "📉"
+        sl, tp, emoji = bar.c + stop_off, bar.c - tp_dist, "📉"
 
     msg_raw = (
         f"{emoji} *({header})* {pair} {timeframe}m {side}\n"
