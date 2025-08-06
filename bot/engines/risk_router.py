@@ -1,3 +1,4 @@
+# risk_router.py
 from __future__ import annotations
 
 import asyncio
@@ -5,7 +6,7 @@ import time
 import logging
 import math
 from collections import defaultdict
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 from bot.infra import Signal, Position, get_client, get_private_ws
 from bot.helpers import config
@@ -13,14 +14,19 @@ from bot.helpers import config
 
 class RiskRouter:
     """
-    Routes Signals into Bybit MARKET brackets with ATR-risk sizing and budget cap.
+    Routes Signals into Bybit MARKET brackets with ATR-risk sizing and a budget cap.
     Keeps a small local 'book' and reconciles it with private WS updates.
+    Book is cleared ONLY on reduce-only (TP/SL) fills
+    Cool-down starts ONLY on StopLoss fills
+    Execution stream fee accumulator & round-trip fee logging
+    Entry/exit price tracking and net (approx) PnL logging
+    Safer qty rounding, robust field parsing
     """
 
-    ACCOUNT_TYPE   = "UNIFIED"   # UTA
-    COIN           = "USDT"
-    MARGIN_BUFFER  = 0.95        # headroom to avoid 110007 on fast ticks
-    RETRY_ON_110007 = 3          # shrink qty and retry if margin error
+    ACCOUNT_TYPE     = "UNIFIED"   # UTA
+    COIN             = "USDT"
+    MARGIN_BUFFER    = 0.95        # headroom to avoid 110007 on fast ticks
+    RETRY_ON_110007  = 3           # shrink qty and retry if margin error
 
     def __init__(self, *, equity_usd: float = 20.0, testnet: bool = True):
         self.equity = float(equity_usd)
@@ -30,7 +36,6 @@ class RiskRouter:
         # private streams
         self.private_ws = get_private_ws(testnet=testnet)
         self.private_ws.order_stream(callback=self._on_order)
-        # subscribe to position/execution if available; else fallback poller
         try:
             self.private_ws.position_stream(callback=self._on_position)
         except Exception:
@@ -49,6 +54,8 @@ class RiskRouter:
         self._lev_min:   Dict[str, float] = {}
         self._lev_max:   Dict[str, float] = {}
         self._leveraged: set[str] = set()
+
+        # cool-down bookkeeping (start only on SL)
         self.last_sl_ts: dict[str, float] = defaultdict(float)
 
         # working state
@@ -56,6 +63,12 @@ class RiskRouter:
         self._oid_to_key: Dict[str, str] = {}
         self.lock = asyncio.Lock()
         self._ws_q: asyncio.Queue = asyncio.Queue()
+
+        # round-trip accounting / diagnostics
+        self._entry_price: Dict[str, float] = defaultdict(float)
+        self._exit_price:  Dict[str, float] = defaultdict(float)
+        self._fees_usdt:   Dict[str, float] = defaultdict(float)
+        self._side:        Dict[str, str]   = defaultdict(str)  # "Buy"/"Sell"
 
         asyncio.create_task(self._track_fills())
 
@@ -102,11 +115,11 @@ class RiskRouter:
         px  = info.get("priceFilter", {})
         lev = info.get("leverageFilter", {})
 
-        self._qty_step[symbol]  = float(lot.get("qtyStep", 0.001))
-        self._min_qty[symbol]   = float(lot.get("minOrderQty", 0.0))
-        self._tick_size[symbol] = float(px.get("tickSize", 0.0001))
-        self._lev_min[symbol]   = float(lev.get("minLeverage", 1))
-        self._lev_max[symbol]   = float(lev.get("maxLeverage", 100))
+        self._qty_step[symbol]  = self._safe_float(lot.get("qtyStep"), 0.001)
+        self._min_qty[symbol]   = self._safe_float(lot.get("minOrderQty"), 0.0)
+        self._tick_size[symbol] = self._safe_float(px.get("tickSize"), 0.0001)
+        self._lev_min[symbol]   = self._safe_float(lev.get("minLeverage"), 1)
+        self._lev_max[symbol]   = self._safe_float(lev.get("maxLeverage"), 100)
 
         if symbol not in self._leveraged:
             cfg_lev = float(getattr(config, "LEVERAGE", 1))
@@ -132,6 +145,13 @@ class RiskRouter:
             return x
         return math.floor(x / step) * step
 
+    @staticmethod
+    def _safe_float(x, default=0.0) -> float:
+        try:
+            return float(x)
+        except Exception:
+            return float(default)
+
     def _round_price(self, symbol: str, px: float) -> float:
         tick = self._tick_size[symbol]
         if tick <= 0:
@@ -148,10 +168,10 @@ class RiskRouter:
             )
             row = resp["result"]["list"][0]
             if "totalAvailableBalance" in row:
-                return float(row["totalAvailableBalance"])
+                return self._safe_float(row["totalAvailableBalance"], 0.0)
             for c in row.get("coin", []):
                 if c.get("coin") == self.COIN:
-                    return float(c.get("availableToWithdraw", c.get("equity", 0.0)))
+                    return self._safe_float(c.get("availableToWithdraw", c.get("equity", 0.0)))
         except Exception as e:
             logging.warning("wallet balance fetch failed: %s (using 0)", e)
         return 0.0
@@ -163,7 +183,7 @@ class RiskRouter:
         step      = self._qty_step[sig.symbol]
         return round(self._floor_step(raw_qty, step), 8)
 
-    async def _size_with_budget(self, sig: Signal) -> tuple[float, float, float]:
+    async def _size_with_budget(self, sig: Signal) -> Tuple[float, float, float]:
         """Return (qty_risk, qty_budget, qty_final)."""
         step      = self._qty_step[sig.symbol]
         qty_risk  = self._atr_risk_qty(sig)
@@ -206,7 +226,7 @@ class RiskRouter:
                     self.http.place_order,
                     category="linear",
                     symbol=s.symbol,
-                    side=s.side,
+                    side=s.side,  # "Buy" or "Sell"
                     orderType="Market",
                     qty=f"{qty}",
                     reduceOnly=False,
@@ -241,7 +261,6 @@ class RiskRouter:
 
     # ─────────────────────────── WS bridges & reconciler ─────────────────────
     def _on_order(self, msg: dict) -> None:
-        # Unified V5 may bundle rows
         rows = msg.get("data", msg.get("result", {}).get("list", [])) or []
         for row in rows:
             topic = row.get("topic", msg.get("topic", "order"))
@@ -282,20 +301,23 @@ class RiskRouter:
 
                 if status == "Filled":
                     logging.info("[%s] order %s filled", symbol, oid)
+                    reduce_only = str(row.get("reduceOnly", "false")).lower() == "true"
+                    tp_sl_type  = (row.get("tpSlOrderType") or "").lower()   # "stoploss"/"takeprofit"/""
 
-                # was this a reduce‑only bracket (TP / SL) … or the market entry?
-                reduce_only = str(row.get("reduceOnly", "false")).lower() == "true"
-                tp_sl_type  = (row.get("tpSlOrderType") or "").lower()  # "stoploss" / "takeprofit" / ""
+                    if reduce_only:
+                        # Exit leg filled (TP or SL)
+                        if tp_sl_type == "stoploss":
+                            self.last_sl_ts[symbol] = time.time()
+                        # best-effort exit price for diagnostics
+                        self._exit_price[symbol] = self._safe_float(row.get("avgPrice") or row.get("price"), 0.0)
+                        self._log_round_trip(symbol, tp_sl_type or "bracket")
+                        self._clear_symbol(symbol, reason=f"reduceOnly {tp_sl_type or ''}")
 
-                if reduce_only:                       # <<< guard starts
-                    if tp_sl_type == "stoploss":      # start cool‑down if it was the SL
-                        self.last_sl_ts[symbol] = time.time()
-
-                 # safe to wipe local book – *only* the exit leg sets reduceOnly
-                    self._clear_symbol(
-                    symbol,
-                    reason=f"reduceOnly {tp_sl_type or 'bracket‑fill'}"
-                  )                        
+                    else:
+                        # Entry leg filled
+                        self._entry_price[symbol] = self._safe_float(row.get("avgPrice") or row.get("price"), 0.0)
+                        self._side[symbol]        = row.get("side", self._side.get(symbol, ""))
+                        self._reset_accumulators(symbol)
 
                 elif status in ("Cancelled", "Rejected"):
                     logging.warning("[%s] order %s %s", symbol, oid, status)
@@ -303,21 +325,33 @@ class RiskRouter:
                     self._oid_to_key.pop(oid, None)
 
                 elif status == "PartiallyFilled":
-                    logging.info("[%s] order %s partially filled", symbol, oid)
+                    logging.info("[%s] order %s partially filled (entry likely)", symbol, oid)
 
             elif t == "position":
                 p = row
                 symbol = p.get("symbol", "")
-                size = float(p.get("size", p.get("positionAmt", 0) or 0))
+                size = self._safe_float(p.get("size", p.get("positionAmt", 0) or 0))
                 if abs(size) == 0.0:
                     self._clear_symbol(symbol, reason="position stream flat")
 
             elif t == "execution":
-                # If your wrapper sends reduce-only executions here, you can also clear
+                # accumulate fees; clear on reduce-only execution as an extra safeguard
                 try:
                     symbol = row.get("symbol", "")
+                    fee    = abs(self._safe_float(row.get("execFee"), 0.0))
+                    if fee:
+                        self._fees_usdt[symbol] += fee
+
                     reduce_only = str(row.get("reduceOnly", "false")).lower() == "true"
                     if reduce_only:
+                        # try to capture a more exact exit price
+                        self._exit_price[symbol] = self._safe_float(row.get("execPrice") or row.get("avgPrice"), 0.0)
+                        # we don't know if it's TP or SL here; try to detect
+                        ord_cat = (row.get("orderCategory") or "").lower()
+                        tp_sl_type = "stoploss" if "sl" in ord_cat else ("takeprofit" if "tp" in ord_cat else "")
+                        if tp_sl_type == "stoploss":
+                            self.last_sl_ts[symbol] = time.time()
+                        self._log_round_trip(symbol, tp_sl_type or "execution")
                         self._clear_symbol(symbol, reason="execution reduceOnly")
                 except Exception:
                     pass
@@ -330,7 +364,7 @@ class RiskRouter:
                 open_syms = {
                     p["symbol"]
                     for p in resp["result"]["list"]
-                    if float(p.get("size", 0) or 0) != 0.0
+                    if self._safe_float(p.get("size", 0) or 0) != 0.0
                 }
                 for k in list(self.book):
                     sym = self.book[k].signal.symbol
@@ -340,6 +374,37 @@ class RiskRouter:
             except Exception as e:
                 logging.warning("position poll failed: %s", e)
             await asyncio.sleep(15)
+
+    # ───────────────────────── fee/PnL diagnostics ──────────────────────────
+    def _reset_accumulators(self, symbol: str) -> None:
+        self._fees_usdt[symbol] = 0.0
+        self._exit_price[symbol] = 0.0
+
+    def _log_round_trip(self, symbol: str, exit_kind: str) -> None:
+        """Best-effort round-trip summary when a bracket leg closes the position."""
+        fees = self._fees_usdt.get(symbol, 0.0)
+        entry = self._entry_price.get(symbol, 0.0)
+        exitp = self._exit_price.get(symbol, 0.0)
+        side  = (self._side.get(symbol) or "").lower()
+        approx = ""
+        try:
+            if entry > 0 and exitp > 0 and symbol in (pos.signal.symbol for pos in self.book.values()):
+                # derive qty from our local book for this symbol
+                qty = 0.0
+                for pos in self.book.values():
+                    if pos.signal.symbol == symbol:
+                        qty = float(pos.qty if hasattr(pos, "qty") else 0.0) or 0.0
+                        break
+                # gross PnL estimate using last known fill prices
+                direction = 1 if side == "buy" else -1
+                gross = direction * (exitp - entry) * qty
+                net = gross - fees
+                approx = f" gross≈{gross:.6f} USDT  fees≈{fees:.6f}  net≈{net:.6f}"
+        except Exception:
+            pass
+
+        logging.info("[%s] round-trip closed via %s. fees=%s USDT.%s",
+                     symbol, exit_kind, f"{fees:.6f}", approx)
 
     # helpers
     def _key_by_oid(self, oid: str) -> Optional[str]:
@@ -354,6 +419,42 @@ class RiskRouter:
                 self._oid_to_key = {oid: kk for oid, kk in self._oid_to_key.items() if kk != k}
                 self.book.pop(k, None)
                 logging.info("[%s] cleared local book (%s).", symbol, reason)
+        # reset diagnostics
+        self._reset_accumulators(symbol)
+        self._entry_price.pop(symbol, None)
+        self._side.pop(symbol, None)
+
+    # ───────────────────────── convenience: fee lookup ──────────────────────
+    async def print_recent_fees(self, symbol: Optional[str] = None, minutes: int = 180) -> None:
+        """
+        Pull recent executions from Bybit REST and print total fees per symbol.
+        """
+        try:
+            # v5 execution list
+            params = {
+                "category": "linear",
+                "limit": 200,
+            }
+            if symbol:
+                params["symbol"] = symbol
+            resp = await asyncio.to_thread(self.http.get_executions, **params)
+            rows = resp.get("result", {}).get("list", []) or []
+            cutoff = time.time() - minutes * 60
+            agg: Dict[str, float] = defaultdict(float)
+            for r in rows:
+                ts = self._safe_float(r.get("execTime"), 0.0) / 1000.0  # ms -> s if present
+                if ts and ts < cutoff:
+                    continue
+                sym = r.get("symbol", "")
+                fee = abs(self._safe_float(r.get("execFee"), 0.0))
+                agg[sym] += fee
+            if not agg:
+                logging.info("No executions (fees) in the last %d minutes.", minutes)
+            else:
+                for sym, total in agg.items():
+                    logging.info("[FEES %s] last %d min: %.6f USDT", sym, minutes, total)
+        except Exception as e:
+            logging.warning("print_recent_fees failed: %s", e)
 
     # ─────────────────────────── graceful shutdown ──────────────────────────
     async def close(self):
