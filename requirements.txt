@@ -14,3 +14,7 @@ python-dotenv
 
 #bybit
 pybit==5.*
+
+fastapi 
+uvicorn
+pydantic-settings
