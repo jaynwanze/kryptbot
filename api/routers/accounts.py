@@ -1,6 +1,7 @@
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
-from ..core.clients import build_bybit_client,get_rest
+from ..core.clients import build_bybit_client, get_rest
+from ..utils.helpers import _sf
 
 router = APIRouter(prefix="/account", tags=["account"])
 
@@ -16,29 +17,30 @@ def _rest_dep():
 
 
 @router.get("/balance")
-async def balance(rest = Depends(get_rest)):
+async def balance(rest=Depends(get_rest)):
     try:
         resp = await rest.privateGetV5AccountWalletBalance({"accountType": "UNIFIED"})
         print(resp)
         row = resp["result"]["list"][0]
-        coins = row.get("coin", [])
-        usdt = next(
-            (
-                float(c.get("walletBalance", 0))
-                for c in coins
-                if c.get("coin") == "USDT"
-            ),
-            0.0,
+
+        # per-coin row (prefer USDT), but Bybit sometimes puts '' in fields
+        coins = row.get("coin") or []
+        usdt = next((c for c in coins if c.get("coin") == "USDT"), {}) or {}
+
+        wallet = _sf(usdt.get("walletBalance", row.get("totalWalletBalance")))
+        available = _sf(
+            usdt.get(
+                "availableToWithdraw",
+                usdt.get("availableBalance", row.get("totalAvailableBalance")),
+            )
         )
-        avail = next(
-            (
-                float(c.get("availableToWithdraw", 0))
-                for c in coins
-                if c.get("coin") == "USDT"
-            ),
-            0.0,
-        )
-        return {"walletBalanceUSDT": usdt, "availableUSDT": avail}
+        equity = _sf(usdt.get("equity", row.get("totalEquity")))
+
+        return {
+            "walletBalanceUSDT": wallet,
+            "availableUSDT": available,
+            "equityUSDT": equity,
+        }
     except Exception as e:
         raise HTTPException(500, f"balance failed: {e}")
 
