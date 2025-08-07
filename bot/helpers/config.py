@@ -10,7 +10,7 @@ INTERVAL        = "15"               # stream interval, string
 LOOKBACK_BARS   = 800                # kept in memory (≈ 8 days)
 
 # Strategy param
-RISK_PCT        = 0.20               # not used (alerts only)
+RISK_PCT        = 0.1               # not used (alerts only)
 STAKE_SIZE_USD   = 1_000          # ‘cash you allocate’ per entry
 LEVERAGE         = 20
 RR_TARGET         = 1.5
