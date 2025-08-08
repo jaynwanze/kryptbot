@@ -30,7 +30,7 @@ def tjr_long_signal(df, i, htf_row) -> bool:
     checks = 0
     checks += ltf.is_bos(df, i, "long")
     checks += ltf.has_fvg(df, i-1, "long")
-    checks += ltf.fib_tag(bar.l, bar, "long")
+    checks += ltf.fib_tag(bar, "long", frac=0.50)
     return checks >= 2
 
 def tjr_short_signal(df, i, htf_row) -> bool:
@@ -41,5 +41,5 @@ def tjr_short_signal(df, i, htf_row) -> bool:
     checks = 0
     checks += ltf.is_bos(df, i, "short")
     checks += ltf.has_fvg(df, i-1, "short")
-    checks += ltf.fib_tag(bar.h, bar, "short")
+    checks += ltf.fib_tag(bar, "short", frac=0.50)
     return checks >= 2

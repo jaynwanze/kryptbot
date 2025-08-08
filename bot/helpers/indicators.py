@@ -7,6 +7,7 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["ema7"]   = df.c.ewm(span=7).mean()
     df["ema14"]  = df.c.ewm(span=14).mean()
     df["ema28"]  = df.c.ewm(span=28).mean()
+    df["ema50"]  = df.c.ewm(span=50).mean()
 
     # ATR
     tr           = np.maximum.reduce([

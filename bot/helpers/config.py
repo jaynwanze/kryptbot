@@ -30,7 +30,7 @@ SESSION_WINDOWS   = {         # UTC sessions
 
 ###  LTF confirmation
 FVG_MIN_PX   = 0.0005  # was 0.0005
-FIB_EXT      = 0.90      # 79 % retrace / extension
+FIB_EXT      = 0.79      # 79 % retrace / extension
 TICK_SIZE = {           # expand as needed
     "SOLUSDT": 0.001,
     "ATOMUSDT": 0.001,

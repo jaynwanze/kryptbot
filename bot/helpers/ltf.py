@@ -40,14 +40,16 @@ def has_fvg(df: pd.DataFrame, idx: int, direction: str, min_gap_frac=0.0003) -> 
     return gap_px >= MIN_GAP_ATR * c1.atr
 
 
-# ── 79 % fib touch of the *same candle* that raided liquidity ──
-def fib_tag(raid_px: float, bar, direction: str) -> bool:
-    """Require the same candle that swept liquidity to tag ≥ 79 % level."""
-    full = bar.h - bar.l
-    if full <= 0:                                 # avoid zero division
+# # ── 79 % fib touch of the *same candle* that raided liquidity ──
+def fib_tag(bar, direction: str, frac=None, use_close=True) -> bool:
+    frac = frac or config.FIB_EXT  # e.g. 0.79–0.90
+    rng = bar.h - bar.l
+    if rng <= 0:
         return False
+    ref = bar.c if use_close else (bar.h if direction == "long" else bar.l)
     if direction == "long":
-        progress = (bar.h - raid_px) / full          # full ↑ retrace
+        level = bar.l + frac * rng
+        return ref >= level
     else:
-        progress = (raid_px - bar.l) / full
-    return progress >= config.FIB_EXT
+        level = bar.h - frac * rng
+        return ref <= level
