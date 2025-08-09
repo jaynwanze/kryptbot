@@ -190,6 +190,8 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                         if router.has_open(pair):
                             logging.info("[%s] No‑trade (already open)", pair)
                             continue
+                        if bar.k_fast > 30:
+                            continue  # long only when ≤30 (tune)
                         logging.info("[%s] LONG signal  %.1f/%.1f", pair, bar.k_fast, bar.adx)
                         logging.info("Entry|TP|SL  %.1f/%.1f/%.1f", bar.c, tp_dist, stop_off)
                         telegram.alert_side(pair, bar, TF, "LONG", stop_off=stop_off, tp_dist=tp_dist, header=header)
@@ -208,6 +210,8 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                     elif tjr_short_signal(hist, i, htf_row):
                         if router.has_open(pair):
                             logging.info("[%s] No-trade (already open)", pair)
+                            continue
+                        if bar.k_fast < 70:       # short only when ≥70 (tune 65–80)
                             continue
                         logging.info("[%s] SHORT signal %.1f/%.1f", pair, bar.k_fast, bar.adx)
                         logging.info("Entry|TP|SL  %.1f/%.1f/%.1f", bar.c, tp_dist, stop_off)
