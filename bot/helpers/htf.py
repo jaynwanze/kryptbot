@@ -6,7 +6,7 @@ HTF_WINDOW = f"{config.HTF_DAYS}D"          # e.g. '15D'
 
 def update_h1(h1: pd.DataFrame, ts, close: float) -> pd.DataFrame:
     ts = pd.Timestamp(ts)
-    stamp = ts.floor("1H")
+    stamp = ts.floor("1h")
     if stamp not in h1.index:
         h1.loc[stamp, "close"] = close
     else:
@@ -18,7 +18,7 @@ def update_h1(h1: pd.DataFrame, ts, close: float) -> pd.DataFrame:
 def h1_row(h1: pd.DataFrame, ts) -> pd.Series:
     """Return the 1-hour row that matches any 15-m timestamp."""
     ts = pd.Timestamp(ts)             # same safety guard
-    return h1.loc[ts.floor("1H")]
+    return h1.loc[ts.floor("1h")]
 
 def build_h1(df15: pd.DataFrame) -> pd.DataFrame:
     """
@@ -27,7 +27,7 @@ def build_h1(df15: pd.DataFrame) -> pd.DataFrame:
     """
     h1 = (
         df15["c"]                      # use the close column
-        .resample("1H")
+        .resample("1h")
         .last()
         .to_frame("close")
         .ffill()

@@ -43,7 +43,7 @@ TICK_SIZE = {           # expand as needed
 }
 # ────────────────────────────────────────────────────────────────
 #  Pairs & history
-PAIRS_LRS: List[str] = ["ATOMUSDT"]
+PAIRS_LRS: List[str] = ["ATOMUSDT", "SOLUSDT", "LINKUSDT", "XRPUSDT"]
 PAIRS_LRS_MULTI: List[str] = ["SOLUSDT", "ETHUSDT", "ATOMUSDT", "WAVESUSDT", "XRPUSDT"]
 # execution realism
 SLIP_BPS = 0.001        #  bps of adverse slippage on entry

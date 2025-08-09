@@ -22,7 +22,7 @@ def is_bos(df: pd.DataFrame, idx: int, direction: str,
         return df.c.iloc[idx] < win.iloc[pivot_idx]
 
 # --- Fair-value gap detection ------------
-def has_fvg(df: pd.DataFrame, idx: int, direction: str, min_gap_frac=0.0003) -> bool:
+def has_fvg(df: pd.DataFrame, idx: int, direction: str, min_gap_frac=0.3) -> bool:
     """
     3‑candle Fair‑Value‑Gap:
         bullish → candle‑0 high < candle‑2 low
@@ -34,7 +34,7 @@ def has_fvg(df: pd.DataFrame, idx: int, direction: str, min_gap_frac=0.0003) -> 
 
     c0, c1, c2 = df.iloc[idx-2], df.iloc[idx-1], df.iloc[idx]   # all historical
 
-    MIN_GAP_ATR = 0.3          # 30 % of current ATR
+    MIN_GAP_ATR = min_gap_frac
 
     gap_px = (c0.h - c2.l) if direction == "long" else (c2.h - c0.l)
     return gap_px >= MIN_GAP_ATR * c1.atr
