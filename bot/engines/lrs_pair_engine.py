@@ -11,6 +11,9 @@ import numpy  as np
 import pandas as pd
 import websockets
 from   asyncio import Queue
+# import httpx
+# EVENT_BASE = os.getenv("EVENT_API_BASE", "http://localhost:8000")
+# HTTPX = httpx.AsyncClient(timeout=3.0)  # reuse one client
 
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
@@ -49,8 +52,10 @@ MIN_GAP_DAYS_PER_PAIR = 14              # hard cool-down after ANY trade
 # Stricter market-quality veto to reduce frequency
 def veto_thresholds(bar):
     vol_norm = bar.atr / bar.atr30
-    min_adx  = 14 + 10 * vol_norm       # stricter than 10 + 8*vol_norm
-    atr_veto = 0.60 + 0.35 * vol_norm   # stricter than 0.5 + 0.3*vol_norm
+    #If trade freq still to low change from 12 to 10
+    min_adx  = 12 + 6 * vol_norm
+    #If trade freq still to low change from .45 to .40
+    atr_veto = 0.45 + 0.25 * vol_norm
     return min_adx, atr_veto
 
 # # Session filter (EU + NY by default). Comment out to disable.
@@ -161,6 +166,8 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                     if bar.adx < min_adx or bar.atr < atr_veto * bar.atr30:
                         logging.info("[%s] No-trade (veto)  k=%.1f  adx=%.1f  atr=%.5f",
                                      pair, bar.k_fast, bar.adx, bar.atr)
+                        if bar.adx < min_adx: logging.info(f"adx_low {bar.adx:.1f}<{min_adx:.1f}")
+                        if bar.atr < atr_veto * bar.atr30: logging.info(f"atr_low {bar.atr:.4f}<{(atr_veto*bar.atr30):.4f}")
                         h1 = update_h1(h1, bar.name, float(bar.c))
                         htf_levels = update_htf_levels_new(htf_levels, bar)
                         continue
@@ -232,6 +239,13 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
             logging.error("WS stream error (%s): %s\n%s", pair, exc, traceback.format_exc())
             await asyncio.sleep(5)  # back-off then reconnect
 
+# SET BEOFRE EACH CONTINUE OR ENTRY
+# async def post_decision(payload: dict):
+#     try:
+#         r = await HTTPX.post(f"{EVENT_BASE}/engine/event", json=payload)
+#         r.raise_for_status()
+#     except Exception as e:
+#         logging.warning("post_decision failed: %s", e)
 # ────────────────────────────────────────────────────────────────
 #  Runner
 # ────────────────────────────────────────────────────────────────
