@@ -253,7 +253,7 @@ async def main():
     router = RiskRouter(equity_usd=20, testnet=False)
 
     # Producer tasks (use the multi-pair list)
-    pairs = getattr(config, "PAIRS_LRS_MULTI", None) or config.PAIRS_LRS
+    pairs = getattr(config, "PAIRS_LRS", None) or config.PAIRS_LRS
     streams = [asyncio.create_task(kline_stream(p, router)) for p in pairs]
 
     # Consumer: execute queued signals
