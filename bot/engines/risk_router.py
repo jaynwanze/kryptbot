@@ -23,15 +23,15 @@ class RiskRouter:
     Safer qty rounding, robust field parsing
     """
 
-    ACCOUNT_TYPE     = "UNIFIED"   # UTA
-    COIN             = "USDT"
-    MARGIN_BUFFER    = 0.95        # headroom to avoid 110007 on fast ticks
-    RETRY_ON_110007  = 3           # shrink qty and retry if margin error
+    ACCOUNT_TYPE = "UNIFIED"  # UTA
+    COIN = "USDT"
+    MARGIN_BUFFER = 0.95  # headroom to avoid 110007 on fast ticks
+    RETRY_ON_110007 = 3  # shrink qty and retry if margin error
 
     def __init__(self, *, equity_usd: float = 20.0, testnet: bool = True):
         self.equity = float(equity_usd)
-        self.http   = get_client(testnet=testnet)
-        self.loop   = asyncio.get_event_loop()
+        self.http = get_client(testnet=testnet)
+        self.loop = asyncio.get_event_loop()
 
         # private streams
         self.private_ws = get_private_ws(testnet=testnet)
@@ -48,11 +48,11 @@ class RiskRouter:
             pass  # optional
 
         # per-symbol meta
-        self._qty_step:  Dict[str, float] = defaultdict(lambda: 0.001)
-        self._min_qty:   Dict[str, float] = defaultdict(lambda: 0.0)
+        self._qty_step: Dict[str, float] = defaultdict(lambda: 0.001)
+        self._min_qty: Dict[str, float] = defaultdict(lambda: 0.0)
         self._tick_size: Dict[str, float] = defaultdict(lambda: 0.0001)
-        self._lev_min:   Dict[str, float] = {}
-        self._lev_max:   Dict[str, float] = {}
+        self._lev_min: Dict[str, float] = {}
+        self._lev_max: Dict[str, float] = {}
         self._leveraged: set[str] = set()
 
         # cool-down bookkeeping (start only on SL)
@@ -66,11 +66,41 @@ class RiskRouter:
 
         # round-trip accounting / diagnostics
         self._entry_price: Dict[str, float] = defaultdict(float)
-        self._exit_price:  Dict[str, float] = defaultdict(float)
-        self._fees_usdt:   Dict[str, float] = defaultdict(float)
-        self._side:        Dict[str, str]   = defaultdict(str)  # "Buy"/"Sell"
+        self._exit_price: Dict[str, float] = defaultdict(float)
+        self._fees_usdt: Dict[str, float] = defaultdict(float)
+        self._side: Dict[str, str] = defaultdict(str)  # "Buy"/"Sell"
 
         asyncio.create_task(self._track_fills())
+
+    # --- portfolio caps (read from config with sensible defaults)
+
+    @property
+    def max_open_concurrent(self) -> int:
+        return int(getattr(config, "MAX_OPEN_CONCURRENT", 5))
+
+    @property
+    def max_total_risk_pct(self) -> float:
+        return float(getattr(config, "MAX_TOTAL_RISK_PCT", 0.30))
+
+    def open_count(self) -> int:
+        return len(self.book)
+
+    def _pos_risk_usd(self, pos: Position) -> float:
+        """Estimated risk in USDT for an open position: |entry - SL| * qty."""
+        sym = pos.signal.symbol
+        # prefer actual filled entry if we have it; else planned entry
+        entry = self._entry_price.get(sym, 0.0) or float(pos.signal.entry)
+        sl = float(pos.signal.sl)
+        qty = float(getattr(pos, "qty", 0.0))
+        return abs(entry - sl) * qty
+
+    def open_risk_usd(self) -> float:
+        return sum(self._pos_risk_usd(p) for p in self.book.values())
+
+    def open_risk_pct(self) -> float:
+        if self.equity <= 0:
+            return 1.0
+        return self.open_risk_usd() / self.equity
 
     # ───────────────────────────── public API ───────────────────────────────
     async def handle(self, sig: Signal) -> None:
@@ -79,26 +109,74 @@ class RiskRouter:
                 logging.info("%s already active – ignoring dup", sig.key)
                 return
 
-            if sig.symbol not in self._lev_max:
-                await self._warm_meta(sig.symbol)
+        # per-pair rule stays: only 1 open per symbol
+        if any(p.signal.symbol == sig.symbol for p in self.book.values()):
+            logging.info("[%s] Skip: already have an open position", sig.symbol)
+            return
 
-            qty_risk, qty_budget, qty = await self._size_with_budget(sig)
-            if qty <= 0:
-                logging.info("[%s] Skip: qty <= 0 (risk %.6f, budget %.6f)",
-                             sig.symbol, qty_risk, qty_budget)
-                return
+        # portfolio concurrency guard
+        if self.open_count() >= self.max_open_concurrent:
+            logging.info(
+                "[PORTFOLIO] Skip %s: concurrent cap reached (%d)",
+                sig.symbol,
+                self.max_open_concurrent,
+            )
+            return
 
-            # exchange minimums
-            step  = self._qty_step[sig.symbol]
-            min_q = max(self._min_qty[sig.symbol], step)
-            if qty < min_q:
-                logging.info("[%s] Skip: qty %.6f < minOrderQty %.6f", sig.symbol, qty, min_q)
-                return
+        # ensure meta (lot size, ticks, leverage) is warm
+        if sig.symbol not in self._lev_max:
+            await self._warm_meta(sig.symbol)
 
-            oid = await self._place_bracket(sig, qty)
-            self.book[sig.key] = Position(sig, oid, qty)
-            self._oid_to_key[oid] = sig.key
-            logging.info("[%s] order placed  id=%s  qty=%.6f", sig.symbol, oid, qty)
+        # size the order first so we know *its* risk
+        qty_risk, qty_budget, qty = await self._size_with_budget(sig)
+        if qty <= 0:
+            logging.info(
+                "[%s] Skip: qty <= 0 (risk %.6f, budget %.6f)",
+                sig.symbol,
+                qty_risk,
+                qty_budget,
+            )
+            return
+
+        # compute proposed risk for THIS order
+        proposed_risk = abs(float(sig.entry) - float(sig.sl)) * float(qty)
+        # portfolio risk guard
+        if (self.open_risk_usd() + proposed_risk) > (
+            self.equity * self.max_total_risk_pct
+        ):
+            logging.info(
+                "[PORTFOLIO] Skip %s: risk cap %.0f%% exceeded "
+                "(open=%.2f, proposed=%.2f, cap=%.2f)",
+                sig.symbol,
+                self.max_total_risk_pct * 100,
+                self.open_risk_usd(),
+                proposed_risk,
+                self.equity * self.max_total_risk_pct,
+            )
+            return
+
+        # exchange minimums
+        step = self._qty_step[sig.symbol]
+        min_q = max(self._min_qty[sig.symbol], step)
+        if qty < min_q:
+            logging.info(
+                "[%s] Skip: qty %.6f < minOrderQty %.6f", sig.symbol, qty, min_q
+            )
+            return
+
+        # place & track
+        oid = await self._place_bracket(sig, qty)
+        self.book[sig.key] = Position(sig, oid, qty)
+        self._oid_to_key[oid] = sig.key
+
+        logging.info(
+            "[%s] order placed id=%s qty=%.6f | router: open=%d risk=%.1f%%",
+            sig.symbol,
+            oid,
+            qty,
+            self.open_count(),
+            self.open_risk_pct() * 100.0,
+        )
 
     # ───────────────────────────── internals ────────────────────────────────
     async def _warm_meta(self, symbol: str) -> None:
@@ -112,14 +190,14 @@ class RiskRouter:
         )["result"]["list"][0]
 
         lot = info.get("lotSizeFilter", {})
-        px  = info.get("priceFilter", {})
+        px = info.get("priceFilter", {})
         lev = info.get("leverageFilter", {})
 
-        self._qty_step[symbol]  = self._safe_float(lot.get("qtyStep"), 0.001)
-        self._min_qty[symbol]   = self._safe_float(lot.get("minOrderQty"), 0.0)
+        self._qty_step[symbol] = self._safe_float(lot.get("qtyStep"), 0.001)
+        self._min_qty[symbol] = self._safe_float(lot.get("minOrderQty"), 0.0)
         self._tick_size[symbol] = self._safe_float(px.get("tickSize"), 0.0001)
-        self._lev_min[symbol]   = self._safe_float(lev.get("minLeverage"), 1)
-        self._lev_max[symbol]   = self._safe_float(lev.get("maxLeverage"), 100)
+        self._lev_min[symbol] = self._safe_float(lev.get("minLeverage"), 1)
+        self._lev_max[symbol] = self._safe_float(lev.get("maxLeverage"), 100)
 
         if symbol not in self._leveraged:
             cfg_lev = float(getattr(config, "LEVERAGE", 1))
@@ -132,11 +210,18 @@ class RiskRouter:
                     buyLeverage=str(lev_use),
                     sellLeverage=str(lev_use),
                 )
-                logging.info("[%s] leverage set to %.1fx (allowed %.2f–%.2f)",
-                             symbol, lev_use, self._lev_min[symbol], self._lev_max[symbol])
+                logging.info(
+                    "[%s] leverage set to %.1fx (allowed %.2f–%.2f)",
+                    symbol,
+                    lev_use,
+                    self._lev_min[symbol],
+                    self._lev_max[symbol],
+                )
                 self._leveraged.add(symbol)
             except Exception as e:
-                logging.warning("[%s] set_leverage failed: %s (continuing; may use 1x)", symbol, e)
+                logging.warning(
+                    "[%s] set_leverage failed: %s (continuing; may use 1x)", symbol, e
+                )
 
     # helpers
     @staticmethod
@@ -171,42 +256,53 @@ class RiskRouter:
                 return self._safe_float(row["totalAvailableBalance"], 0.0)
             for c in row.get("coin", []):
                 if c.get("coin") == self.COIN:
-                    return self._safe_float(c.get("availableToWithdraw", c.get("equity", 0.0)))
+                    return self._safe_float(
+                        c.get("availableToWithdraw", c.get("equity", 0.0))
+                    )
         except Exception as e:
             logging.warning("wallet balance fetch failed: %s (using 0)", e)
         return 0.0
 
     def _atr_risk_qty(self, sig: Signal) -> float:
-        risk_usd  = self.equity * float(getattr(config, "RISK_PCT", 0.2))
+        risk_usd = self.equity * float(getattr(config, "RISK_PCT", 0.2))
         stop_dist = max(abs(float(sig.entry) - float(sig.sl)), 1e-8)
-        raw_qty   = risk_usd / stop_dist
-        step      = self._qty_step[sig.symbol]
+        raw_qty = risk_usd / stop_dist
+        step = self._qty_step[sig.symbol]
         return round(self._floor_step(raw_qty, step), 8)
 
     async def _size_with_budget(self, sig: Signal) -> Tuple[float, float, float]:
         """Return (qty_risk, qty_budget, qty_final)."""
-        step      = self._qty_step[sig.symbol]
-        qty_risk  = self._atr_risk_qty(sig)
+        step = self._qty_step[sig.symbol]
+        qty_risk = self._atr_risk_qty(sig)
 
-        avail  = await self._get_available_usdt()
+        avail = await self._get_available_usdt()
         lev_cf = float(getattr(config, "LEVERAGE", 1.0))
-        lev    = min(max(lev_cf, self._lev_min[sig.symbol]), self._lev_max[sig.symbol])
+        lev = min(max(lev_cf, self._lev_min[sig.symbol]), self._lev_max[sig.symbol])
 
         notional_cap = avail * lev * self.MARGIN_BUFFER
-        qty_budget   = 0.0
+        qty_budget = 0.0
         if float(sig.entry) > 0:
             qty_budget = self._floor_step(notional_cap / float(sig.entry), step)
 
         qty = min(qty_risk, qty_budget)
 
         # detailed sizing log
-        risk_usd  = self.equity * float(getattr(config, "RISK_PCT", 0.2))
+        risk_usd = self.equity * float(getattr(config, "RISK_PCT", 0.2))
         stop_dist = max(abs(float(sig.entry) - float(sig.sl)), 1e-8)
         logging.info(
             "[SIZER %s] px=%.6f stop=%.6f risk_usd=%.2f avail=%.4f lev=%.2f "
             "cap=%.4f qty_risk=%.6f qty_budget=%.6f step=%.6f -> qty=%.6f",
-            sig.symbol, float(sig.entry), stop_dist, risk_usd,
-            avail, lev, notional_cap, qty_risk, qty_budget, step, qty
+            sig.symbol,
+            float(sig.entry),
+            stop_dist,
+            risk_usd,
+            avail,
+            lev,
+            notional_cap,
+            qty_risk,
+            qty_budget,
+            step,
+            qty,
         )
         return qty_risk, qty_budget, qty
 
@@ -250,8 +346,12 @@ class RiskRouter:
                 if "110007" in last_err or "insufficient" in last_err.lower():
                     qty = max(0.0, qty - step)
                     tries -= 1
-                    logging.warning("[%s] margin error; shrinking qty and retrying (%d left). err=%s",
-                                    s.symbol, tries, last_err)
+                    logging.warning(
+                        "[%s] margin error; shrinking qty and retrying (%d left). err=%s",
+                        s.symbol,
+                        tries,
+                        last_err,
+                    )
                     if qty <= 0:
                         break
                     await asyncio.sleep(0.2)
@@ -266,7 +366,9 @@ class RiskRouter:
             topic = row.get("topic", msg.get("topic", "order"))
             if topic != "order":
                 continue
-            self.loop.call_soon_threadsafe(self._ws_q.put_nowait, {"_t": "order", "row": row})
+            self.loop.call_soon_threadsafe(
+                self._ws_q.put_nowait, {"_t": "order", "row": row}
+            )
 
     def _on_position(self, msg: dict) -> None:
         rows = msg.get("data", msg.get("result", {}).get("list", [])) or []
@@ -274,7 +376,9 @@ class RiskRouter:
             topic = row.get("topic", msg.get("topic", "position"))
             if topic != "position":
                 continue
-            self.loop.call_soon_threadsafe(self._ws_q.put_nowait, {"_t": "position", "row": row})
+            self.loop.call_soon_threadsafe(
+                self._ws_q.put_nowait, {"_t": "position", "row": row}
+            )
 
     def _on_execution(self, msg: dict) -> None:
         rows = msg.get("data", msg.get("result", {}).get("list", [])) or []
@@ -282,7 +386,9 @@ class RiskRouter:
             topic = row.get("topic", msg.get("topic", "execution"))
             if topic != "execution":
                 continue
-            self.loop.call_soon_threadsafe(self._ws_q.put_nowait, {"_t": "execution", "row": row})
+            self.loop.call_soon_threadsafe(
+                self._ws_q.put_nowait, {"_t": "execution", "row": row}
+            )
 
     async def _track_fills(self) -> None:
         while True:
@@ -291,7 +397,7 @@ class RiskRouter:
             row = envelope.get("row", {})
 
             if t == "order":
-                oid    = row.get("orderId", "")
+                oid = row.get("orderId", "")
                 status = row.get("orderStatus", "")
                 symbol = row.get("symbol", "")
 
@@ -302,21 +408,29 @@ class RiskRouter:
                 if status == "Filled":
                     logging.info("[%s] order %s filled", symbol, oid)
                     reduce_only = str(row.get("reduceOnly", "false")).lower() == "true"
-                    tp_sl_type  = (row.get("tpSlOrderType") or "").lower()   # "stoploss"/"takeprofit"/""
+                    tp_sl_type = (
+                        row.get("tpSlOrderType") or ""
+                    ).lower()  # "stoploss"/"takeprofit"/""
 
                     if reduce_only:
                         # Exit leg filled (TP or SL)
                         if tp_sl_type == "stoploss":
                             self.last_sl_ts[symbol] = time.time()
                         # best-effort exit price for diagnostics
-                        self._exit_price[symbol] = self._safe_float(row.get("avgPrice") or row.get("price"), 0.0)
+                        self._exit_price[symbol] = self._safe_float(
+                            row.get("avgPrice") or row.get("price"), 0.0
+                        )
                         self._log_round_trip(symbol, tp_sl_type or "bracket")
-                        self._clear_symbol(symbol, reason=f"reduceOnly {tp_sl_type or ''}")
+                        self._clear_symbol(
+                            symbol, reason=f"reduceOnly {tp_sl_type or ''}"
+                        )
 
                     else:
                         # Entry leg filled
-                        self._entry_price[symbol] = self._safe_float(row.get("avgPrice") or row.get("price"), 0.0)
-                        self._side[symbol]        = row.get("side", self._side.get(symbol, ""))
+                        self._entry_price[symbol] = self._safe_float(
+                            row.get("avgPrice") or row.get("price"), 0.0
+                        )
+                        self._side[symbol] = row.get("side", self._side.get(symbol, ""))
                         self._reset_accumulators(symbol)
 
                 elif status in ("Cancelled", "Rejected"):
@@ -325,7 +439,9 @@ class RiskRouter:
                     self._oid_to_key.pop(oid, None)
 
                 elif status == "PartiallyFilled":
-                    logging.info("[%s] order %s partially filled (entry likely)", symbol, oid)
+                    logging.info(
+                        "[%s] order %s partially filled (entry likely)", symbol, oid
+                    )
 
             elif t == "position":
                 p = row
@@ -338,17 +454,23 @@ class RiskRouter:
                 # accumulate fees; clear on reduce-only execution as an extra safeguard
                 try:
                     symbol = row.get("symbol", "")
-                    fee    = abs(self._safe_float(row.get("execFee"), 0.0))
+                    fee = abs(self._safe_float(row.get("execFee"), 0.0))
                     if fee:
                         self._fees_usdt[symbol] += fee
 
                     reduce_only = str(row.get("reduceOnly", "false")).lower() == "true"
                     if reduce_only:
                         # try to capture a more exact exit price
-                        self._exit_price[symbol] = self._safe_float(row.get("execPrice") or row.get("avgPrice"), 0.0)
+                        self._exit_price[symbol] = self._safe_float(
+                            row.get("execPrice") or row.get("avgPrice"), 0.0
+                        )
                         # we don't know if it's TP or SL here; try to detect
                         ord_cat = (row.get("orderCategory") or "").lower()
-                        tp_sl_type = "stoploss" if "sl" in ord_cat else ("takeprofit" if "tp" in ord_cat else "")
+                        tp_sl_type = (
+                            "stoploss"
+                            if "sl" in ord_cat
+                            else ("takeprofit" if "tp" in ord_cat else "")
+                        )
                         if tp_sl_type == "stoploss":
                             self.last_sl_ts[symbol] = time.time()
                         self._log_round_trip(symbol, tp_sl_type or "execution")
@@ -360,7 +482,9 @@ class RiskRouter:
         """Fallback when position stream is unavailable."""
         while True:
             try:
-                resp = await asyncio.to_thread(self.http.get_positions, category="linear")
+                resp = await asyncio.to_thread(
+                    self.http.get_positions, category="linear"
+                )
                 open_syms = {
                     p["symbol"]
                     for p in resp["result"]["list"]
@@ -370,7 +494,9 @@ class RiskRouter:
                     sym = self.book[k].signal.symbol
                     if sym not in open_syms:
                         self.book.pop(k, None)
-                        logging.info("[%s] position flat (poll); cleared local book.", sym)
+                        logging.info(
+                            "[%s] position flat (poll); cleared local book.", sym
+                        )
             except Exception as e:
                 logging.warning("position poll failed: %s", e)
             await asyncio.sleep(15)
@@ -385,10 +511,14 @@ class RiskRouter:
         fees = self._fees_usdt.get(symbol, 0.0)
         entry = self._entry_price.get(symbol, 0.0)
         exitp = self._exit_price.get(symbol, 0.0)
-        side  = (self._side.get(symbol) or "").lower()
+        side = (self._side.get(symbol) or "").lower()
         approx = ""
         try:
-            if entry > 0 and exitp > 0 and symbol in (pos.signal.symbol for pos in self.book.values()):
+            if (
+                entry > 0
+                and exitp > 0
+                and symbol in (pos.signal.symbol for pos in self.book.values())
+            ):
                 # derive qty from our local book for this symbol
                 qty = 0.0
                 for pos in self.book.values():
@@ -403,8 +533,13 @@ class RiskRouter:
         except Exception:
             pass
 
-        logging.info("[%s] round-trip closed via %s. fees=%s USDT.%s",
-                     symbol, exit_kind, f"{fees:.6f}", approx)
+        logging.info(
+            "[%s] round-trip closed via %s. fees=%s USDT.%s",
+            symbol,
+            exit_kind,
+            f"{fees:.6f}",
+            approx,
+        )
 
     # helpers
     def _key_by_oid(self, oid: str) -> Optional[str]:
@@ -416,7 +551,9 @@ class RiskRouter:
     def _clear_symbol(self, symbol: str, *, reason: str) -> None:
         for k in list(self.book):
             if self.book[k].signal.symbol == symbol:
-                self._oid_to_key = {oid: kk for oid, kk in self._oid_to_key.items() if kk != k}
+                self._oid_to_key = {
+                    oid: kk for oid, kk in self._oid_to_key.items() if kk != k
+                }
                 self.book.pop(k, None)
                 logging.info("[%s] cleared local book (%s).", symbol, reason)
         # reset diagnostics
@@ -425,7 +562,9 @@ class RiskRouter:
         self._side.pop(symbol, None)
 
     # ───────────────────────── convenience: fee lookup ──────────────────────
-    async def print_recent_fees(self, symbol: Optional[str] = None, minutes: int = 180) -> None:
+    async def print_recent_fees(
+        self, symbol: Optional[str] = None, minutes: int = 180
+    ) -> None:
         """
         Pull recent executions from Bybit REST and print total fees per symbol.
         """
@@ -442,7 +581,9 @@ class RiskRouter:
             cutoff = time.time() - minutes * 60
             agg: Dict[str, float] = defaultdict(float)
             for r in rows:
-                ts = self._safe_float(r.get("execTime"), 0.0) / 1000.0  # ms -> s if present
+                ts = (
+                    self._safe_float(r.get("execTime"), 0.0) / 1000.0
+                )  # ms -> s if present
                 if ts and ts < cutoff:
                     continue
                 sym = r.get("symbol", "")
@@ -452,7 +593,9 @@ class RiskRouter:
                 logging.info("No executions (fees) in the last %d minutes.", minutes)
             else:
                 for sym, total in agg.items():
-                    logging.info("[FEES %s] last %d min: %.6f USDT", sym, minutes, total)
+                    logging.info(
+                        "[FEES %s] last %d min: %.6f USDT", sym, minutes, total
+                    )
         except Exception as e:
             logging.warning("print_recent_fees failed: %s", e)
 

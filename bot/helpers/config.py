@@ -4,12 +4,15 @@
 from typing import List
 
 
-PAIR = "ATOMUSDT"  # Bybit symbol: SOL/ATOM/WAVES/XRP
+PAIR = "FILUSDT"  # Bybit symbol: SOL/ATOM/WAVES/XRP
 TF_SECONDS = 15 * 60  # 15‑minute bars
 INTERVAL = "15"  # stream interval, string
 LOOKBACK_BARS = 800  # kept in memory (≈ 8 days)
 
 # Strategy param
+# portfolio guards
+MAX_OPEN_CONCURRENT = 3  # max total open positions across ALL pairs
+MAX_TOTAL_RISK_PCT = 0.30  # e.g., 30% of equity at risk across all opens
 RISK_PCT = 0.1  # not used (alerts only)
 STAKE_SIZE_USD = 1_000  # ‘cash you allocate’ per entry
 LEVERAGE = 20
@@ -34,36 +37,47 @@ SESSION_WINDOWS = {  # UTC sessions
 FVG_MIN_PX = 0.0005  # was 0.0005
 FIB_EXT = 0.79  # 79 % retrace / extension
 TICK_SIZE = {  # expand as needed
-    "SOLUSDT": 0.001,
-    "ATOMUSDT": 0.001,
-    "WAVESUSDT": 0.0001,
-    "XRPUSDT": 0.0001,
     "ETHUSDT": 0.01,
-    "CHZUSDT": 0.001,
+    "SOLUSDT": 0.001,
+    "FILUSDT": 0.001,
+    "ATOMUSDT": 0.001,
+    "AVAXUSDT": 0.001,
+    "NEARUSDT": 0.001,
+    "APTUSDT": 0.0001,
+    "WAVESUSDT": 0.0001,
     "LINKUSDT": 0.001,
-    "DOGEUSDT": 0.0001,
-    "ADAUSDT": 0.00001,
-    "MNTUSDT": 0.00001,
-    "OPUSDT": 0.0001,
+    "XRPUSDT": 0.0001,
     "APEUSDT": 0.0001,
     "DOTUSDT": 0.0001,
+    "OPUSDT": 0.0001,
+    "FXSUSDT": 0.0001,
+    "DYDXUSDT": 0.0001,
+    "DOGEUSDT": 0.00001,
+    "ADAUSDT": 0.00001,
+    "MNTUSDT": 0.00001,
     "GMTUSDT": 0.00001,
+    "CHZUSDT": 0.00001,
+    "WOOUSDT": 0.00001,
 }
 # ────────────────────────────────────────────────────────────────
 #  Pairs & history
 PAIRS_LRS: List[str] = [
     "ATOMUSDT",
-    "SOLUSDT",
-    "LINKUSDT",
-    "XRPUSDT",
     "DOGEUSDT",
+    # "MNTUSDT",
     "ADAUSDT",
-    "MNTUSDT",
-    "OPUSDT",
-    "APEUSDT",
+    # "APEUSDT",
+    # "GMTUSDT",
     "DOTUSDT",
-    "GMTUSDT",
-    "CHZUSDT",
+    # "CHZUSDT",
+    "AVAXUSDT",
+    "APTUSDT",
+    "NEARUSDT",
+    "FILUSDT",
+    "XRPUSDT",
+    "SOLUSDT",
+    # "LINKUSDT",
+    # "OPUSDT",
 ]
 # execution realism
 SLIP_BPS = 0.001  #  bps of adverse slippage on entry
