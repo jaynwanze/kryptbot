@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .core.config import settings
 from .core.clients import build_bybit_client
-from .routers import health_router, account_router, risk_router
+from .routers import health_router, account_router, risk_router, market_router, risk_router, engine_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -25,3 +25,5 @@ app.add_middleware(
 app.include_router(health_router)
 app.include_router(account_router)
 app.include_router(risk_router)
+app.include_router(market_router)
+app.include_router(engine_router)
