@@ -309,7 +309,7 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                                 bar.c,
                                 sl=bar.c + stop_off,
                                 tp=bar.c - tp_dist,
-                                key=f"{pair}-{bar.name:%H%M}",
+                                key=f"{pair}-{bar.name:%Y%m%d-%H%M}",
                                 ts=bar.name,
                             )
                             await SIGNAL_Q.put(sig)
@@ -333,6 +333,7 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
             )
             await asyncio.sleep(5)  # back-off then reconnect
 
+
 # SET BEOFRE EACH CONTINUE OR ENTRY
 # async def post_decision(payload: dict):
 #     try:
@@ -344,20 +345,18 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
 #  Runner
 # ────────────────────────────────────────────────────────────────
 async def main():
-    router = RiskRouter(equity_usd=20, testnet=False)
-
-    # Producer tasks (use the multi-pair list)
+    router = RiskRouter(equity_usd=1000, testnet=False)  # use your real equity
     pairs = getattr(config, "PAIRS_LRS", None) or config.PAIRS_LRS
+
     streams = [asyncio.create_task(kline_stream(p, router)) for p in pairs]
 
-    # Consumer: execute queued signals
     async def consume():
         MAX_OPEN = getattr(config, "MAX_OPEN_CONCURRENT", 3)
         MAX_RISK = getattr(config, "MAX_TOTAL_RISK_PCT", 0.30)
         MAX_AGE = getattr(config, "MAX_SIGNAL_AGE_SEC", 5)
 
         while True:
-            sig = await SIGNAL_Q.get()  # ALWAYS consume
+            sig = await SIGNAL_Q.get()  # always consume
             try:
                 # drop stale signals
                 age = (pd.Timestamp.utcnow(tz="UTC") - sig.ts).total_seconds()
@@ -370,21 +369,25 @@ async def main():
                     or router.open_risk_pct() >= MAX_RISK
                 ):
                     logging.info(
-                        "[PORTFOLIO] Risk/concurrency budget full — drop %s", sig.symbol
+                        "[PORTFOLIO] Risk/concurrency full — drop %s", sig.symbol
                     )
                     continue
 
                 await router.handle(sig)
                 logging.info(
-                    "Signal processed: %s | open=%d risk=%.1f%%",
+                    "Processed: %s | open=%d risk=%.1f%%",
                     sig.symbol,
                     router.open_count(),
-                    router.open_risk_pct() * 100.0,
+                    router.open_risk_pct() * 100,
                 )
             except Exception as e:
                 logging.error("Router error: %s", e)
             finally:
                 SIGNAL_Q.task_done()
+
+    # START the consumer and WAIT on everything
+    streams.append(asyncio.create_task(consume()))
+    await asyncio.gather(*streams)
 
 
 if __name__ == "__main__":
