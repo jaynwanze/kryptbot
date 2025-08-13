@@ -353,13 +353,22 @@ async def main():
     async def consume():
         MAX_OPEN = getattr(config, "MAX_OPEN_CONCURRENT", 3)
         MAX_RISK = getattr(config, "MAX_TOTAL_RISK_PCT", 0.30)
+        # (Optional) Bump MAX_SIGNAL_AGE_SEC a hair (e.g., 7–10s) if your WS + queue occasionally introduce minor latency
         MAX_AGE = getattr(config, "MAX_SIGNAL_AGE_SEC", 5)
 
         while True:
             sig = await SIGNAL_Q.get()  # always consume
             try:
                 # drop stale signals
-                age = (pd.Timestamp.utcnow(tz="UTC") - sig.ts).total_seconds()
+                now_utc = pd.Timestamp.now("UTC")
+                ts = pd.Timestamp(
+                    sig.ts
+                )  # accepts datetime, numpy.datetime64, str, etc.
+                sig_ts = (
+                    ts.tz_localize("UTC") if ts.tz is None else ts.tz_convert("UTC")
+                )
+                age = (now_utc - sig_ts).total_seconds()
+
                 if age > MAX_AGE:
                     logging.info("[%s] Drop stale signal age=%.1fs", sig.symbol, age)
                     continue
@@ -381,7 +390,7 @@ async def main():
                     router.open_risk_pct() * 100,
                 )
             except Exception as e:
-                logging.error("Router error: %s", e)
+                logging.error("Router error: %s", e, exc_info=True)
             finally:
                 SIGNAL_Q.task_done()
 
