@@ -1,5 +1,6 @@
 # risk_router.py
 from __future__ import annotations
+from decimal import Decimal, ROUND_DOWN
 
 import asyncio
 import time
@@ -11,6 +12,11 @@ from typing import Dict, Optional, Tuple
 from bot.infra import Signal, Position, get_client, get_private_ws
 from bot.helpers import config
 
+def quantize_step(value, step):
+    step = Decimal(str(step))
+    v = (Decimal(str(value)) // step) * step  # floor to step
+    decimals = max(0, -step.as_tuple().exponent)
+    return format(v, f".{decimals}f")  # clean string like "192.7" or "0.7"
 
 class RiskRouter:
     """
@@ -101,6 +107,12 @@ class RiskRouter:
         if self.equity <= 0:
             return 1.0
         return self.open_risk_usd() / self.equity
+
+    def _fmt_px(self, symbol: str, px: float) -> str:
+        tick = Decimal(str(self._tick_size[symbol]))
+        decs = max(0, -tick.as_tuple().exponent)
+        q = (Decimal(str(px)) // tick) * tick  # floor to tick
+        return format(q, f".{decs}f")
 
     # ───────────────────────────── public API ───────────────────────────────
     async def handle(self, sig: Signal) -> None:
@@ -264,7 +276,7 @@ class RiskRouter:
         return 0.0
 
     def _atr_risk_qty(self, sig: Signal) -> float:
-        risk_usd = self.equity * float(getattr(config, "RISK_PCT", 0.2))
+        risk_usd = self.equity * float(getattr(config, "RISK_PCT", 0.1))
         stop_dist = max(abs(float(sig.entry) - float(sig.sl)), 1e-8)
         raw_qty = risk_usd / stop_dist
         step = self._qty_step[sig.symbol]
@@ -287,7 +299,7 @@ class RiskRouter:
         qty = min(qty_risk, qty_budget)
 
         # detailed sizing log
-        risk_usd = self.equity * float(getattr(config, "RISK_PCT", 0.2))
+        risk_usd = self.equity * float(getattr(config, "RISK_PCT", 0.1))
         stop_dist = max(abs(float(sig.entry) - float(sig.sl)), 1e-8)
         logging.info(
             "[SIZER %s] px=%.6f stop=%.6f risk_usd=%.2f avail=%.4f lev=%.2f "
@@ -307,57 +319,66 @@ class RiskRouter:
         return qty_risk, qty_budget, qty
 
     # ── order placement -------------------------------------------------------
-    async def _place_bracket(self, s: Signal, qty: float) -> str:
-        """Market entry + attach TP/SL via set_trading_stop (reduce-only)."""
-        px_tp = self._round_price(s.symbol, float(s.tp))
-        px_sl = self._round_price(s.symbol, float(s.sl))
 
-        # try place; shrink on margin error (110007)
-        step = self._qty_step[s.symbol]
-        tries = self.RETRY_ON_110007 + 1
-        last_err = None
-        while tries > 0:
-            try:
-                resp = await asyncio.to_thread(
-                    self.http.place_order,
-                    category="linear",
-                    symbol=s.symbol,
-                    side=s.side,  # "Buy" or "Sell"
-                    orderType="Market",
-                    qty=f"{qty}",
-                    reduceOnly=False,
-                    closeOnTrigger=False,
-                )
-                oid: str = resp["result"]["orderId"]
 
-                await asyncio.to_thread(
-                    self.http.set_trading_stop,
-                    category="linear",
-                    symbol=s.symbol,
-                    takeProfit=f"{px_tp:.6f}",
-                    stopLoss=f"{px_sl:.6f}",
-                    tpTriggerBy="LastPrice",
-                    slTriggerBy="LastPrice",
-                    positionIdx=0,
+async def _place_bracket(self, s: Signal, qty: float) -> str:
+    # round TP/SL to tick
+    tp_str = self._fmt_px(s.symbol, float(s.tp))
+    sl_str = self._fmt_px(s.symbol, float(s.sl))
+
+    # try place; shrink on margin error (110007)
+    step = self._qty_step[s.symbol]
+    tries = self.RETRY_ON_110007 + 1
+    last_err = None
+
+    # **USE the symbol’s lot step and send a clean string**
+    qty_str = quantize_step(qty, step)
+
+    while tries > 0:
+        try:
+            resp = await asyncio.to_thread(
+                self.http.place_order,
+                category="linear",
+                symbol=s.symbol,
+                side=s.side,
+                orderType="Market",
+                qty=qty_str,  # <— use the quantized string
+                reduceOnly=False,
+                closeOnTrigger=False,
+            )
+            oid: str = resp["result"]["orderId"]
+
+            await asyncio.to_thread(
+                self.http.set_trading_stop,
+                category="linear",
+                symbol=s.symbol,
+                takeProfit=tp_str,
+                stopLoss=sl_str,
+                tpTriggerBy="LastPrice",
+                slTriggerBy="LastPrice",
+                positionIdx=0,
+            )
+            return oid
+
+        except Exception as e:
+            last_err = str(e)
+            if "110007" in last_err or "insufficient" in last_err.lower():
+                # shrink then re-quantize (avoids 0.7000000000000001)
+                new_qty = max(0.0, float(qty_str) - step)
+                qty_str = quantize_step(new_qty, step)
+                tries -= 1
+                logging.warning(
+                    "[%s] margin error; shrinking qty and retrying (%d left). err=%s",
+                    s.symbol,
+                    tries,
+                    last_err,
                 )
-                return oid
-            except Exception as e:
-                last_err = str(e)
-                if "110007" in last_err or "insufficient" in last_err.lower():
-                    qty = max(0.0, qty - step)
-                    tries -= 1
-                    logging.warning(
-                        "[%s] margin error; shrinking qty and retrying (%d left). err=%s",
-                        s.symbol,
-                        tries,
-                        last_err,
-                    )
-                    if qty <= 0:
-                        break
-                    await asyncio.sleep(0.2)
-                else:
-                    raise
-        raise RuntimeError(f"place_bracket failed after retries: {last_err}")
+                if float(qty_str) <= 0:
+                    break
+                await asyncio.sleep(0.2)
+            else:
+                raise
+    raise RuntimeError(f"place_bracket failed after retries: {last_err}")
 
     # ─────────────────────────── WS bridges & reconciler ─────────────────────
     def _on_order(self, msg: dict) -> None:

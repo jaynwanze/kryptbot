@@ -277,7 +277,7 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                                 bar.c,
                                 sl=bar.c - stop_off,
                                 tp=bar.c + tp_dist,
-                                key=f"{pair}-{bar.name:%H%M}",
+                                key=f"{pair}-{bar.name:%Y%m%d-%H%M}",
                                 ts=bar.name,
                             )
                             await SIGNAL_Q.put(sig)
@@ -345,7 +345,7 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
 #  Runner
 # ────────────────────────────────────────────────────────────────
 async def main():
-    router = RiskRouter(equity_usd=1000, testnet=False)  # use your real equity
+    router = RiskRouter(equity_usd=20, testnet=False)  # use your real equity
     pairs = getattr(config, "PAIRS_LRS", None) or config.PAIRS_LRS
 
     streams = [asyncio.create_task(kline_stream(p, router)) for p in pairs]
