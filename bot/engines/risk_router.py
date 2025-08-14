@@ -12,11 +12,13 @@ from typing import Dict, Optional, Tuple
 from bot.infra import Signal, Position, get_client, get_private_ws
 from bot.helpers import config
 
+
 def quantize_step(value, step):
     step = Decimal(str(step))
     v = (Decimal(str(value)) // step) * step  # floor to step
     decimals = max(0, -step.as_tuple().exponent)
     return format(v, f".{decimals}f")  # clean string like "192.7" or "0.7"
+
 
 class RiskRouter:
     """
@@ -320,65 +322,64 @@ class RiskRouter:
 
     # ── order placement -------------------------------------------------------
 
+    async def _place_bracket(self, s: Signal, qty: float) -> str:
+        # round TP/SL to tick
+        tp_str = self._fmt_px(s.symbol, float(s.tp))
+        sl_str = self._fmt_px(s.symbol, float(s.sl))
 
-async def _place_bracket(self, s: Signal, qty: float) -> str:
-    # round TP/SL to tick
-    tp_str = self._fmt_px(s.symbol, float(s.tp))
-    sl_str = self._fmt_px(s.symbol, float(s.sl))
+        # try place; shrink on margin error (110007)
+        step = self._qty_step[s.symbol]
+        tries = self.RETRY_ON_110007 + 1
+        last_err = None
 
-    # try place; shrink on margin error (110007)
-    step = self._qty_step[s.symbol]
-    tries = self.RETRY_ON_110007 + 1
-    last_err = None
+        # **USE the symbol’s lot step and send a clean string**
+        qty_str = quantize_step(qty, step)
 
-    # **USE the symbol’s lot step and send a clean string**
-    qty_str = quantize_step(qty, step)
-
-    while tries > 0:
-        try:
-            resp = await asyncio.to_thread(
-                self.http.place_order,
-                category="linear",
-                symbol=s.symbol,
-                side=s.side,
-                orderType="Market",
-                qty=qty_str,  # <— use the quantized string
-                reduceOnly=False,
-                closeOnTrigger=False,
-            )
-            oid: str = resp["result"]["orderId"]
-
-            await asyncio.to_thread(
-                self.http.set_trading_stop,
-                category="linear",
-                symbol=s.symbol,
-                takeProfit=tp_str,
-                stopLoss=sl_str,
-                tpTriggerBy="LastPrice",
-                slTriggerBy="LastPrice",
-                positionIdx=0,
-            )
-            return oid
-
-        except Exception as e:
-            last_err = str(e)
-            if "110007" in last_err or "insufficient" in last_err.lower():
-                # shrink then re-quantize (avoids 0.7000000000000001)
-                new_qty = max(0.0, float(qty_str) - step)
-                qty_str = quantize_step(new_qty, step)
-                tries -= 1
-                logging.warning(
-                    "[%s] margin error; shrinking qty and retrying (%d left). err=%s",
-                    s.symbol,
-                    tries,
-                    last_err,
+        while tries > 0:
+            try:
+                resp = await asyncio.to_thread(
+                    self.http.place_order,
+                    category="linear",
+                    symbol=s.symbol,
+                    side=s.side,
+                    orderType="Market",
+                    qty=qty_str,  # <— use the quantized string
+                    reduceOnly=False,
+                    closeOnTrigger=False,
                 )
-                if float(qty_str) <= 0:
-                    break
-                await asyncio.sleep(0.2)
-            else:
-                raise
-    raise RuntimeError(f"place_bracket failed after retries: {last_err}")
+                oid: str = resp["result"]["orderId"]
+
+                await asyncio.to_thread(
+                    self.http.set_trading_stop,
+                    category="linear",
+                    symbol=s.symbol,
+                    takeProfit=tp_str,
+                    stopLoss=sl_str,
+                    tpTriggerBy="LastPrice",
+                    slTriggerBy="LastPrice",
+                    positionIdx=0,
+                )
+                return oid
+
+            except Exception as e:
+                last_err = str(e)
+                if "110007" in last_err or "insufficient" in last_err.lower():
+                    # shrink then re-quantize (avoids 0.7000000000000001)
+                    new_qty = max(0.0, float(qty_str) - step)
+                    qty_str = quantize_step(new_qty, step)
+                    tries -= 1
+                    logging.warning(
+                        "[%s] margin error; shrinking qty and retrying (%d left). err=%s",
+                        s.symbol,
+                        tries,
+                        last_err,
+                    )
+                    if float(qty_str) <= 0:
+                        break
+                    await asyncio.sleep(0.2)
+                else:
+                    raise
+            raise RuntimeError(f"place_bracket failed after retries: {last_err}")
 
     # ─────────────────────────── WS bridges & reconciler ─────────────────────
     def _on_order(self, msg: dict) -> None:
