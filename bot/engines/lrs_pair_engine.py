@@ -21,7 +21,7 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from bot.infra.models import Signal, Position
-from bot.engines.risk_router import RiskRouter
+from bot.engines.risk_router import RiskRouter, audit_and_override_ticks
 from bot.helpers import (
     config,
     compute_indicators,  # → ATR, ADX, Stoch, RSI, …
@@ -62,6 +62,10 @@ def veto_thresholds(bar):
     # If trade freq still to low change from .45 to .40
     atr_veto = 0.45 + 0.25 * vol_norm
     return min_adx, atr_veto
+
+def has_open_in_cluster(router, symbol, clusters):
+    cid = clusters.get(symbol)
+    return cid and any(clusters.get(p.signal.symbol) == cid for p in router.book.values())
 
 
 # # Session filter (EU + NY by default). Comment out to disable.
@@ -347,12 +351,14 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
 async def main():
     router = RiskRouter(equity_usd=20, testnet=False)  # use your real equity
     pairs = getattr(config, "PAIRS_LRS", None) or config.PAIRS_LRS
+    await audit_and_override_ticks(router, getattr(config, "PAIRS_LRS", []))
 
     streams = [asyncio.create_task(kline_stream(p, router)) for p in pairs]
 
     async def consume():
         MAX_OPEN = getattr(config, "MAX_OPEN_CONCURRENT", 3)
         MAX_RISK = getattr(config, "MAX_TOTAL_RISK_PCT", 0.30)
+        MAX_PER_SIDE = getattr(config, "MAX_PER_SIDE_OPEN", 1)
         # (Optional) Bump MAX_SIGNAL_AGE_SEC a hair (e.g., 7–10s) if your WS + queue occasionally introduce minor latency
         MAX_AGE = getattr(config, "MAX_SIGNAL_AGE_SEC", 5)
 
@@ -368,7 +374,6 @@ async def main():
                     ts.tz_localize("UTC") if ts.tz is None else ts.tz_convert("UTC")
                 )
                 age = (now_utc - sig_ts).total_seconds()
-
                 if age > MAX_AGE:
                     logging.info("[%s] Drop stale signal age=%.1fs", sig.symbol, age)
                     continue
@@ -376,12 +381,17 @@ async def main():
                 if (
                     router.open_count() >= MAX_OPEN
                     or router.open_risk_pct() >= MAX_RISK
+                    or router.open_count_side(sig.side) >= MAX_PER_SIDE
                 ):
                     logging.info(
                         "[PORTFOLIO] Risk/concurrency full — drop %s", sig.symbol
                     )
                     continue
-
+                # check for open positions in the same cluster
+                if has_open_in_cluster(router, sig.symbol, config.CLUSTER):
+                    logging.info("[PORTFOLIO] Cluster busy — drop %s", sig.symbol)
+                    continue
+                ## Handle signal if all checks pass
                 await router.handle(sig)
                 logging.info(
                     "Processed: %s | open=%d risk=%.1f%%",

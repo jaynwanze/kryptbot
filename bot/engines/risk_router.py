@@ -13,6 +13,24 @@ from bot.infra import Signal, Position, get_client, get_private_ws
 from bot.helpers import config
 
 
+# in risk_router.py or a helper module
+async def audit_and_override_ticks(router, symbols):
+    for sym in symbols:
+        # warm caches (gets qtyStep, minOrderQty, tickSize, etc.)
+        await router._warm_meta(sym)
+        live_tick = router._tick_size[sym]
+        cfg_tick = getattr(config, "TICK_SIZE", {}).get(sym)
+        mark = "✅" if cfg_tick is None or float(cfg_tick) == live_tick else "❌"
+        logging.info(
+            "[FILTERS %s] tickSize live=%s cfg=%s %s", sym, live_tick, cfg_tick, mark
+        )
+        # optional: override the config value so any code that still reads it is correct
+        try:
+            config.TICK_SIZE[sym] = live_tick
+        except Exception:
+            pass
+
+
 def quantize_step(value, step):
     step = Decimal(str(step))
     v = (Decimal(str(value)) // step) * step  # floor to step
@@ -115,6 +133,10 @@ class RiskRouter:
         decs = max(0, -tick.as_tuple().exponent)
         q = (Decimal(str(px)) // tick) * tick  # floor to tick
         return format(q, f".{decs}f")
+
+    def open_count_side(self, side: str) -> int:
+        s = side.lower()
+        return sum(1 for p in self.book.values() if p.signal.side.lower() == s)
 
     # ───────────────────────────── public API ───────────────────────────────
     async def handle(self, sig: Signal) -> None:
