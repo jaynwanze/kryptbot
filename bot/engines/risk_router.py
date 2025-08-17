@@ -10,7 +10,7 @@ from collections import defaultdict
 from typing import Dict, Optional, Tuple
 
 from bot.infra import Signal, Position, get_client, get_private_ws
-from bot.helpers import config
+from bot.helpers import config, telegram
 
 
 # in risk_router.py or a helper module
@@ -340,6 +340,12 @@ class RiskRouter:
             step,
             qty,
         )
+        telegram.bybit_alert(
+            msg=f"[SIZER {sig.symbol}] px={sig.entry:.6f} stop={sig.sl:.6f} "
+            f"risk_usd={risk_usd:.2f} avail={avail:.4f} lev={lev:.2f} "
+            f"cap={notional_cap:.4f} qty_risk={qty_risk:.6f} "
+            f"qty_budget={qty_budget:.6f} step={step:.6f} -> qty={qty:.6f}"
+        )
         return qty_risk, qty_budget, qty
 
     # ── order placement -------------------------------------------------------
@@ -396,6 +402,9 @@ class RiskRouter:
                         tries,
                         last_err,
                     )
+                    telegram.bybit_alert(
+                        msg=f"Margin error; shrinking qty and retrying ({tries} left). err={last_err}"
+                    )
                     if float(qty_str) <= 0:
                         break
                     await asyncio.sleep(0.2)
@@ -451,6 +460,7 @@ class RiskRouter:
 
                 if status == "Filled":
                     logging.info("[%s] order %s filled", symbol, oid)
+                    telegram.bybit_alert(msg=f"Order {oid} filled for {symbol}")
                     reduce_only = str(row.get("reduceOnly", "false")).lower() == "true"
                     tp_sl_type = (
                         row.get("tpSlOrderType") or ""
@@ -479,12 +489,16 @@ class RiskRouter:
 
                 elif status in ("Cancelled", "Rejected"):
                     logging.warning("[%s] order %s %s", symbol, oid, status)
+                    telegram.bybit_alert(msg=f"Order {oid} {status} for {symbol}")
                     self.book.pop(key, None)
                     self._oid_to_key.pop(oid, None)
 
                 elif status == "PartiallyFilled":
                     logging.info(
                         "[%s] order %s partially filled (entry likely)", symbol, oid
+                    )
+                    telegram.bybit_alert(
+                        msg=f"Order {oid} partially filled for {symbol}"
                     )
 
             elif t == "position":
@@ -541,8 +555,12 @@ class RiskRouter:
                         logging.info(
                             "[%s] position flat (poll); cleared local book.", sym
                         )
+                        telegram.bybit_alert(
+                            msg=f"Position flat (poll); cleared local book for {sym}"
+                        )
             except Exception as e:
                 logging.warning("position poll failed: %s", e)
+                telegram.bybit_alert(msg=f"Position poll failed: {e}")
             await asyncio.sleep(15)
 
     # ───────────────────────── fee/PnL diagnostics ──────────────────────────
@@ -584,6 +602,9 @@ class RiskRouter:
             f"{fees:.6f}",
             approx,
         )
+        telegram.bybit_alert(
+            msg=f"Round-trip closed for {symbol}. {exit_kind}. fees={fees:.6f}. {approx}"
+        )
 
     # helpers
     def _key_by_oid(self, oid: str) -> Optional[str]:
@@ -600,6 +621,9 @@ class RiskRouter:
                 }
                 self.book.pop(k, None)
                 logging.info("[%s] cleared local book (%s).", symbol, reason)
+                telegram.bybit_alert(
+                    msg=f"Position flat (poll); cleared local book for {symbol} for reason: {reason}"
+                )
         # reset diagnostics
         self._reset_accumulators(symbol)
         self._entry_price.pop(symbol, None)
@@ -639,6 +663,9 @@ class RiskRouter:
                 for sym, total in agg.items():
                     logging.info(
                         "[FEES %s] last %d min: %.6f USDT", sym, minutes, total
+                    )
+                    telegram.bybit_alert(
+                        msg=f"[FEES {sym}] last {minutes} min: {total:.6f} USDT"
                     )
         except Exception as e:
             logging.warning("print_recent_fees failed: %s", e)

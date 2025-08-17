@@ -376,6 +376,7 @@ async def main():
                 age = (now_utc - sig_ts).total_seconds()
                 if age > MAX_AGE:
                     logging.info("[%s] Drop stale signal age=%.1fs", sig.symbol, age)
+                    telegram.bybit_alert(msg=f"[SIGNAL {sig.symbol}] Drop stale signal age={age:.1f}s")
                     continue
                 # portfolio caps
                 if (
@@ -386,10 +387,12 @@ async def main():
                     logging.info(
                         "[PORTFOLIO] Risk/concurrency full — drop %s", sig.symbol
                     )
+                    telegram.bybit_alert(msg=f"[PORTFOLIO] Risk/concurrency full — drop {sig.symbol}")
                     continue
                 # check for open positions in the same cluster
                 if has_open_in_cluster(router, sig.symbol, config.CLUSTER):
                     logging.info("[PORTFOLIO] Cluster busy — drop %s", sig.symbol)
+                    telegram.bybit_alert(msg=f"[PORTFOLIO] Cluster busy — drop {sig.symbol}")
                     continue
                 ## Handle signal if all checks pass
                 await router.handle(sig)
