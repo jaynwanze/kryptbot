@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
+
 @dataclass
 class Signal:
     symbol: str
@@ -12,10 +13,13 @@ class Signal:
     tp: float
     key: str  # unique id = f"{symbol}-{entry:%H%M}"
     ts: datetime
-    # optional meta (safe defaults)
-    adx: Optional[float] = None
-    k_fast: Optional[float] = None
-    vol: Optional[float] = None
+    adx: float = 0.0
+    k_fast: float = 50.0
+    k_slow: float = 50.0
+    d_slow: float = 50.0
+    vol: float = 0.0
+    off_sl: float = 0.0  # distance from entry to SL at signal time
+    off_tp: float = 0.0  # distance from entry to TP at signal time
 
 
 @dataclass

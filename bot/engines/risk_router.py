@@ -480,6 +480,49 @@ class RiskRouter:
             self.loop.call_soon_threadsafe(
                 self._ws_q.put_nowait, {"_t": "execution", "row": row}
             )
+    # async functions
+    async def _reseed_bracket_after_fill(self, symbol: str) -> None:
+        # find the position for this symbol
+        for pos in self.book.values():
+            if pos.signal.symbol != symbol:
+                continue
+            s = pos.signal
+            entry = float(self._entry_price.get(symbol, 0.0))
+            if entry <= 0:
+                return
+            off_sl = float(getattr(s, "off_sl", 0.0))
+            off_tp = float(getattr(s, "off_tp", 0.0))
+            if off_sl <= 0 or off_tp <= 0:
+                return
+
+            if s.side.lower() == "buy":
+                new_sl = self._fmt_px(symbol, entry - off_sl)
+                new_tp = self._fmt_px(symbol, entry + off_tp)
+            else:
+                new_sl = self._fmt_px(symbol, entry + off_sl)
+                new_tp = self._fmt_px(symbol, entry - off_tp)
+
+            await asyncio.to_thread(
+                self.http.set_trading_stop,
+                category="linear",
+                symbol=symbol,
+                takeProfit=new_tp,
+                stopLoss=new_sl,
+                tpTriggerBy="LastPrice",
+                slTriggerBy="LastPrice",
+                positionIdx=0,
+            )
+            logging.info(
+                "[%s] adjusted TP/SL after fill: entry=%.6f SL=%s TP=%s",
+                symbol,
+                entry,
+                new_sl,
+                new_tp,
+            )
+            telegram.bybit_alert(
+                msg=f"[{symbol}] adjusted TP/SL after fill: entry={entry:.6f} SL={new_sl} TP={new_tp}"
+            )
+            return
 
     async def _track_fills(self) -> None:
         while True:
@@ -524,6 +567,7 @@ class RiskRouter:
                         )
                         self._side[symbol] = row.get("side", self._side.get(symbol, ""))
                         self._reset_accumulators(symbol)
+                        await self._reseed_bracket_after_fill(symbol)
 
                 elif status in ("Cancelled", "Rejected"):
                     logging.warning("[%s] order %s %s", symbol, oid, status)

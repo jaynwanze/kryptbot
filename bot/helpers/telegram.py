@@ -32,6 +32,7 @@ def alert_side(
         f"Stop   : `{sl:.3f}`\n"
         f"Target : `{tp:.3f}`\n"
         f"ADX    : `{bar.adx:.1f}` | StochK: `{bar.k_fast:.1f}`"
+        f" | StochS: `{bar.k_slow:.1f}` | StochD: `{bar.d_slow:.1f}`\n"
     )
 
     try:

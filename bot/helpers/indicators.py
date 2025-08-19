@@ -2,44 +2,61 @@ import numpy as np
 import pandas as pd
 
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    """Ensure *df* has o,h,l,c,v columns.  Adds all lenses we need."""
-    # EMAs
-    df["ema7"]   = df.c.ewm(span=7).mean()
-    df["ema14"]  = df.c.ewm(span=14).mean()
-    df["ema28"]  = df.c.ewm(span=28).mean()
-    df["ema50"]  = df.c.ewm(span=50).mean()
+    """Ensure df has o,h,l,c,v. Adds EMAs, ATR/ATR30, RSI, StochRSI (%K fast/slow), ADX, etc."""
+    # ── EMAs
+    df["ema7"]  = df.c.ewm(span=7,  adjust=False).mean()
+    df["ema14"] = df.c.ewm(span=14, adjust=False).mean()
+    df["ema28"] = df.c.ewm(span=28, adjust=False).mean()
+    df["ema50"] = df.c.ewm(span=50, adjust=False).mean()
 
-    # ATR
-    tr           = np.maximum.reduce([
-                        df.h - df.l,
-                        (df.h - df.c.shift()).abs(),
-                        (df.l - df.c.shift()).abs(),
-                    ])
-    df["atr"]    = pd.Series(tr, index=df.index).rolling(14).mean()
-    df["atr30"] = df.atr.rolling(30).mean()
+    # ── ATR (Wilder-style TR with simple smoothing to match your previous code)
+    tr = np.maximum.reduce([
+        df.h - df.l,
+        (df.h - df.c.shift()).abs(),
+        (df.l - df.c.shift()).abs(),
+    ])
+    df["atr"]   = pd.Series(tr, index=df.index).rolling(14, min_periods=1).mean()
+    df["atr30"] = df["atr"].rolling(30, min_periods=1).mean()
 
-    # RSI / Stoch‑RSI
-    delta        = df.c.diff()
-    gain         = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
-    loss         = (-delta.clip(upper=0)).ewm(alpha=1/14, adjust=False).mean()
-    rsi          = 100 - 100/(1+gain/loss)
-    df["rsi"] = rsi                       # <‑‑ stored for signal logic
-    rsi_min      = rsi.rolling(14).min();   rsi_max = rsi.rolling(14).max()
-    df["k_fast"] = ((rsi - rsi_min)/(rsi_max - rsi_min)).rolling(3).mean()*100
-    df["d_fast"] = df.k_fast.rolling(3).mean()  # %D fast
+    # ── RSI
+    win = 14
+    delta = df.c.diff()
+    gain  = delta.clip(lower=0).ewm(alpha=1/win, adjust=False).mean()
+    loss  = (-delta.clip(upper=0)).ewm(alpha=1/win, adjust=False).mean()
+    rsi   = 100 - 100 / (1 + gain / loss)
+    df["rsi"] = rsi
 
-    # ADX
-    plus_dm      = np.where(df.h.diff() > df.l.diff(),
-                            df.h.diff().clip(lower=0), 0)
-    minus_dm     = np.where(df.l.diff() > df.h.diff(),
-                            df.l.diff().abs(), 0)
-    tr_n         = pd.Series(tr, index=df.index).rolling(14).sum()
-    plus_di      = 100 * pd.Series(plus_dm, index=df.index).rolling(14).sum() / tr_n
-    minus_di     = 100 * pd.Series(minus_dm, index=df.index).rolling(14).sum() / tr_n
-    dx           = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
-    df["adx"]    = dx.rolling(14).mean()
-    df["adx_prev"] = df.adx.shift()
+    # ── StochRSI
+    rsi_min = rsi.rolling(win, min_periods=1).min()
+    rsi_max = rsi.rolling(win, min_periods=1).max()
+    denom   = (rsi_max - rsi_min).replace(0, np.nan)
 
-    # Volume MA (optional filter)
-    df["vol20"]  = df.v.rolling(20).mean()
+    k_raw   = 100 * (rsi - rsi_min) / denom
+    k_fast  = k_raw.rolling(3, min_periods=1).mean()      # %K fast (3)
+    d_fast  = k_fast.rolling(3, min_periods=1).mean()     # %D fast (3)
+    k_slow  = d_fast                                      # classic “slow %K”
+    d_slow  = d_fast.rolling(3, min_periods=1).mean()     # classic “slow %D”
+
+    df["k_fast"] = k_fast.clip(0, 100)
+    df["d_fast"] = d_fast.clip(0, 100)
+    df["k_slow"] = k_slow.clip(0, 100)
+    df["d_slow"] = d_slow.clip(0, 100)
+
+    # ── ADX (kept consistent with your rolling-sum approach)
+    up_move   = df.h.diff()
+    down_move = -df.l.diff()
+
+    plus_dm  = np.where((up_move > down_move) & (up_move > 0),  up_move,  0.0)
+    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
+
+    tr_n     = pd.Series(tr, index=df.index).rolling(14, min_periods=1).sum()
+    plus_di  = 100 * pd.Series(plus_dm,  index=df.index).rolling(14, min_periods=1).sum() / tr_n
+    minus_di = 100 * pd.Series(minus_dm, index=df.index).rolling(14, min_periods=1).sum() / tr_n
+    dx       = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
+    df["adx"]      = dx.rolling(14, min_periods=1).mean()
+    df["adx_prev"] = df["adx"].shift()
+
+    # ── Volume MA (optional)
+    df["vol20"] = df.v.rolling(20, min_periods=1).mean()
+
     return df

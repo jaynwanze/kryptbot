@@ -285,12 +285,14 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                                 tp=bar.c + tp_dist,
                                 key=f"{pair}-{bar.name:%Y%m%d-%H%M}",
                                 ts=bar.name,
+                                adx=float(bar.adx),
+                                k_fast=float(bar.k_fast),
+                                k_slow=float(bar.k_slow),
+                                d_slow=float(bar.d_slow),
+                                vol=float(getattr(bar, "v", 0.0)),
+                                off_sl=stop_off,
+                                off_tp=tp_dist,
                             )
-                            setattr(sig, "adx", float(bar.adx))
-                            setattr(sig, "k_fast", float(bar.k_fast))
-                            setattr(
-                                sig, "vol", float(getattr(bar, "v", 0.0))
-                            )  # optional
                             await SIGNAL_Q.put(sig)
                             last_signal_ts[pair] = time.time()
 
@@ -322,12 +324,14 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                                 tp=bar.c - tp_dist,
                                 key=f"{pair}-{bar.name:%Y%m%d-%H%M}",
                                 ts=bar.name,
+                                adx=float(bar.adx),
+                                k_fast=float(bar.k_fast),
+                                k_slow=float(bar.k_slow),
+                                d_slow=float(bar.d_slow),
+                                vol=float(getattr(bar, "v", 0.0)),
+                                off_sl=stop_off,
+                                off_tp=tp_dist,
                             )
-                            setattr(sig, "adx", float(bar.adx))
-                            setattr(sig, "k_fast", float(bar.k_fast))
-                            setattr(
-                                sig, "vol", float(getattr(bar, "v", 0.0))
-                            )  # optional
                             await SIGNAL_Q.put(sig)
                             last_signal_ts[pair] = time.time()
                     else:
@@ -367,13 +371,21 @@ async def consume(router: RiskRouter):
     MAX_AGE = getattr(config, "MAX_SIGNAL_AGE_SEC", 30)  # 20–30s on 15m
     COALESCE_SEC = getattr(config, "COALESCE_SEC", 2)
 
-    def score(s: Signal) -> float:
-        # simple, robust strength metric (extend later if you pass meta on Signal)
-        return (
-            abs(float(s.tp) - float(s.sl))
-            * float(getattr(s, "adx", 1.0))
-            * float(getattr(s, "k_fast", 1.0))
-        )
+    def score(s):
+        width = abs(float(s.tp) - float(s.sl))  # stop distance (ATR proxy)
+        adx = float(getattr(s, "adx", 1.0))
+        kf = float(getattr(s, "k_fast", 50.0))
+        ks = float(getattr(s, "k_slow", kf))
+
+        # side-aware: longs prefer LOWER stochastic, shorts prefer HIGHER
+        if s.side == "Buy":
+            k_factor = max(
+                1.0, (200.0 - (kf + ks)) / 20.0
+            )  # 1x..10x as K gets oversold
+        else:
+            k_factor = max(1.0, ((kf + ks)) / 20.0)  # 1x..10x as K gets overbought
+
+        return width * adx * k_factor
 
     while True:
         # 1) start a coalescing window
