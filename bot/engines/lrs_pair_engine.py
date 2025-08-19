@@ -5,7 +5,6 @@
 import os, json, asyncio, logging, time, traceback
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Tuple
-
 import ccxt.async_support as ccxt
 import numpy as np
 import pandas as pd
@@ -286,10 +285,12 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                                 tp=bar.c + tp_dist,
                                 key=f"{pair}-{bar.name:%Y%m%d-%H%M}",
                                 ts=bar.name,
-                                adx=bar.adx,
-                                k_fast=bar.k_fast,
-                                vol=bar.vol,
                             )
+                            setattr(sig, "adx", float(bar.adx))
+                            setattr(sig, "k_fast", float(bar.k_fast))
+                            setattr(
+                                sig, "vol", float(getattr(bar, "v", 0.0))
+                            )  # optional
                             await SIGNAL_Q.put(sig)
                             last_signal_ts[pair] = time.time()
 
@@ -321,10 +322,12 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                                 tp=bar.c - tp_dist,
                                 key=f"{pair}-{bar.name:%Y%m%d-%H%M}",
                                 ts=bar.name,
-                                adx=bar.adx,
-                                k_fast=bar.k_fast,
-                                vol=bar.vol,
                             )
+                            setattr(sig, "adx", float(bar.adx))
+                            setattr(sig, "k_fast", float(bar.k_fast))
+                            setattr(
+                                sig, "vol", float(getattr(bar, "v", 0.0))
+                            )  # optional
                             await SIGNAL_Q.put(sig)
                             last_signal_ts[pair] = time.time()
                     else:
@@ -447,7 +450,7 @@ async def consume(router: RiskRouter):
 async def main():
     router = RiskRouter(equity_usd=20, testnet=False)  # use your real equity
     pairs = getattr(config, "PAIRS_LRS", None) or config.PAIRS_LRS
-    await audit_and_override_ticks(router, getattr(config, "PAIRS_LRS", []))
+    await audit_and_override_ticks(router, pairs)
 
     streams = [asyncio.create_task(kline_stream(p, router)) for p in pairs]
     # START the consumer and WAIT on everything
