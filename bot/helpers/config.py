@@ -4,15 +4,16 @@
 from typing import List
 
 
-PAIR = "RENDERUSDT"  # Bybit symbol: SOL/ATOM/WAVES/XRP
+PAIR = "OPUSDT"  # Bybit symbol: SOL/ATOM/WAVES/XRP
 TF_SECONDS = 15 * 60  # 15‑minute bars
 INTERVAL = "15"  # stream interval, string
 LOOKBACK_BARS = 800  # kept in memory (≈ 8 days)
 
 # Strategy param
 # portfolio guards
-MAX_OPEN_CONCURRENT = 3  # max total open positions across ALL pairs
-MAX_PER_SIDE_OPEN = 1  # max open positions per side (buy/sell)
+MAX_SIGNAL_AGE_SEC   = 30
+COALESCE_SEC         = 2
+MAX_PER_SIDE_OPEN = 2  # max open positions per side (buy/sell)
 MAX_TOTAL_RISK_PCT = 0.30  # e.g., 30% of equity at risk across all opens
 RISK_PCT = 0.1  # not used (alerts only)
 STAKE_SIZE_USD = 1_000  # ‘cash you allocate’ per entry

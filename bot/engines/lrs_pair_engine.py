@@ -63,9 +63,12 @@ def veto_thresholds(bar):
     atr_veto = 0.45 + 0.25 * vol_norm
     return min_adx, atr_veto
 
+
 def has_open_in_cluster(router, symbol, clusters):
     cid = clusters.get(symbol)
-    return cid and any(clusters.get(p.signal.symbol) == cid for p in router.book.values())
+    return cid and any(
+        clusters.get(p.signal.symbol) == cid for p in router.book.values()
+    )
 
 
 # # Session filter (EU + NY by default). Comment out to disable.
@@ -283,6 +286,9 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                                 tp=bar.c + tp_dist,
                                 key=f"{pair}-{bar.name:%Y%m%d-%H%M}",
                                 ts=bar.name,
+                                adx=bar.adx,
+                                k_fast=bar.k_fast,
+                                vol=bar.vol,
                             )
                             await SIGNAL_Q.put(sig)
                             last_signal_ts[pair] = time.time()
@@ -315,6 +321,9 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                                 tp=bar.c - tp_dist,
                                 key=f"{pair}-{bar.name:%Y%m%d-%H%M}",
                                 ts=bar.name,
+                                adx=bar.adx,
+                                k_fast=bar.k_fast,
+                                vol=bar.vol,
                             )
                             await SIGNAL_Q.put(sig)
                             last_signal_ts[pair] = time.time()
@@ -348,67 +357,101 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
 # ────────────────────────────────────────────────────────────────
 #  Runner
 # ────────────────────────────────────────────────────────────────
+async def consume(router: RiskRouter):
+    MAX_OPEN = getattr(config, "MAX_OPEN_CONCURRENT", 3)
+    MAX_RISK = getattr(config, "MAX_TOTAL_RISK_PCT", 0.30)
+    MAX_PER_SIDE = getattr(config, "MAX_PER_SIDE_OPEN", 1)
+    MAX_AGE = getattr(config, "MAX_SIGNAL_AGE_SEC", 30)  # 20–30s on 15m
+    COALESCE_SEC = getattr(config, "COALESCE_SEC", 2)
+
+    def score(s: Signal) -> float:
+        # simple, robust strength metric (extend later if you pass meta on Signal)
+        return (
+            abs(float(s.tp) - float(s.sl))
+            * float(getattr(s, "adx", 1.0))
+            * float(getattr(s, "k_fast", 1.0))
+        )
+
+    while True:
+        # 1) start a coalescing window
+        sig0 = await SIGNAL_Q.get()
+        batch = [sig0]
+
+        until = time.time() + COALESCE_SEC
+        while time.time() < until:
+            try:
+                batch.append(SIGNAL_Q.get_nowait())
+            except asyncio.QueueEmpty:
+                await asyncio.sleep(0.05)
+
+        # mark each dequeued item as done **exactly once**
+        for _ in batch:
+            SIGNAL_Q.task_done()
+
+        # 2) filter stale
+        now_utc = pd.Timestamp.now("UTC")
+        fresh = []
+        for s in batch:
+            ts = pd.Timestamp(s.ts)
+            sig_ts = ts.tz_localize("UTC") if ts.tz is None else ts.tz_convert("UTC")
+            age = (now_utc - sig_ts).total_seconds()
+            if age <= MAX_AGE:
+                fresh.append(s)
+            else:
+                logging.info("[%s] Drop stale signal age=%.1fs", s.symbol, age)
+                telegram.bybit_alert(
+                    msg=f"[SIGNAL {s.symbol}] Drop stale signal age={age:.1f}s"
+                )
+        if not fresh:
+            continue
+
+        # 3) dedupe per symbol (keep the latest)
+        dedup = {}
+        for s in fresh:
+            dedup[s.symbol] = s
+        fresh = list(dedup.values())
+
+        # 4) strongest first
+        fresh.sort(key=score, reverse=True)
+
+        # 5) portfolio/cluster gates + handle
+        for s in fresh:
+            if (
+                router.open_count() >= MAX_OPEN
+                or router.open_risk_pct() >= MAX_RISK
+                or router.open_count_side(s.side) >= MAX_PER_SIDE
+            ):
+                logging.info("[PORTFOLIO] Risk/concurrency full — drop %s", s.symbol)
+                telegram.bybit_alert(
+                    msg=f"[PORTFOLIO] Risk/concurrency full — drop {s.symbol}"
+                )
+                continue
+
+            if has_open_in_cluster(router, s.symbol, config.CLUSTER):
+                logging.info("[PORTFOLIO] Cluster busy — drop %s", s.symbol)
+                telegram.bybit_alert(msg=f"[PORTFOLIO] Cluster busy — drop {s.symbol}")
+                continue
+
+            try:
+                await router.handle(s)
+                logging.info(
+                    "Processed: %s | open=%d risk=%.1f%%",
+                    s.symbol,
+                    router.open_count(),
+                    router.open_risk_pct() * 100,
+                )
+            except Exception as e:
+                logging.error("Router error: %s", e, exc_info=True)
+
+
 async def main():
     router = RiskRouter(equity_usd=20, testnet=False)  # use your real equity
     pairs = getattr(config, "PAIRS_LRS", None) or config.PAIRS_LRS
     await audit_and_override_ticks(router, getattr(config, "PAIRS_LRS", []))
 
     streams = [asyncio.create_task(kline_stream(p, router)) for p in pairs]
-
-    async def consume():
-        MAX_OPEN = getattr(config, "MAX_OPEN_CONCURRENT", 3)
-        MAX_RISK = getattr(config, "MAX_TOTAL_RISK_PCT", 0.30)
-        MAX_PER_SIDE = getattr(config, "MAX_PER_SIDE_OPEN", 1)
-        # (Optional) Bump MAX_SIGNAL_AGE_SEC a hair (e.g., 7–10s) if your WS + queue occasionally introduce minor latency
-        MAX_AGE = getattr(config, "MAX_SIGNAL_AGE_SEC", 5)
-
-        while True:
-            sig = await SIGNAL_Q.get()  # always consume
-            try:
-                # drop stale signals
-                now_utc = pd.Timestamp.now("UTC")
-                ts = pd.Timestamp(
-                    sig.ts
-                )  # accepts datetime, numpy.datetime64, str, etc.
-                sig_ts = (
-                    ts.tz_localize("UTC") if ts.tz is None else ts.tz_convert("UTC")
-                )
-                age = (now_utc - sig_ts).total_seconds()
-                if age > MAX_AGE:
-                    logging.info("[%s] Drop stale signal age=%.1fs", sig.symbol, age)
-                    telegram.bybit_alert(msg=f"[SIGNAL {sig.symbol}] Drop stale signal age={age:.1f}s")
-                    continue
-                # portfolio caps
-                if (
-                    router.open_count() >= MAX_OPEN
-                    or router.open_risk_pct() >= MAX_RISK
-                    or router.open_count_side(sig.side) >= MAX_PER_SIDE
-                ):
-                    logging.info(
-                        "[PORTFOLIO] Risk/concurrency full — drop %s", sig.symbol
-                    )
-                    telegram.bybit_alert(msg=f"[PORTFOLIO] Risk/concurrency full — drop {sig.symbol}")
-                    continue
-                # check for open positions in the same cluster
-                if has_open_in_cluster(router, sig.symbol, config.CLUSTER):
-                    logging.info("[PORTFOLIO] Cluster busy — drop %s", sig.symbol)
-                    telegram.bybit_alert(msg=f"[PORTFOLIO] Cluster busy — drop {sig.symbol}")
-                    continue
-                ## Handle signal if all checks pass
-                await router.handle(sig)
-                logging.info(
-                    "Processed: %s | open=%d risk=%.1f%%",
-                    sig.symbol,
-                    router.open_count(),
-                    router.open_risk_pct() * 100,
-                )
-            except Exception as e:
-                logging.error("Router error: %s", e, exc_info=True)
-            finally:
-                SIGNAL_Q.task_done()
-
     # START the consumer and WAIT on everything
-    streams.append(asyncio.create_task(consume()))
+    streams.append(asyncio.create_task(consume(router)))
     await asyncio.gather(*streams)
 
 

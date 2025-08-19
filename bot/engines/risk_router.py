@@ -11,6 +11,7 @@ from typing import Dict, Optional, Tuple
 
 from bot.infra import Signal, Position, get_client, get_private_ws
 from bot.helpers import config, telegram
+import ccxt.async_support as ccxt
 
 
 # in risk_router.py or a helper module
@@ -58,7 +59,12 @@ class RiskRouter:
         self.equity = float(equity_usd)
         self.http = get_client(testnet=testnet)
         self.loop = asyncio.get_event_loop()
-
+        self.ccxt = ccxt.bybit({"enableRateLimit": True})
+        try:
+            if testnet:
+                self.ccxt.set_sandbox_mode(True)
+        except Exception:
+            pass
         # private streams
         self.private_ws = get_private_ws(testnet=testnet)
         self.private_ws.order_stream(callback=self._on_order)
@@ -138,6 +144,10 @@ class RiskRouter:
         s = side.lower()
         return sum(1 for p in self.book.values() if p.signal.side.lower() == s)
 
+    def round_qty(self, symbol: str, qty: float) -> float:
+        step = self._qty_step[symbol]
+        return float(quantize_step(qty, step))
+
     # ───────────────────────────── public API ───────────────────────────────
     async def handle(self, sig: Signal) -> None:
         async with self.lock:
@@ -145,7 +155,7 @@ class RiskRouter:
                 logging.info("%s already active – ignoring dup", sig.key)
                 return
 
-        # per-pair rule stays: only 1 open per symbol
+        # per-pair rule: only 1 open per symbol
         if any(p.signal.symbol == sig.symbol for p in self.book.values()):
             logging.info("[%s] Skip: already have an open position", sig.symbol)
             return
@@ -163,19 +173,27 @@ class RiskRouter:
         if sig.symbol not in self._lev_max:
             await self._warm_meta(sig.symbol)
 
-        # size the order first so we know *its* risk
-        qty_risk, qty_budget, qty = await self._size_with_budget(sig)
-        if qty <= 0:
-            logging.info(
-                "[%s] Skip: qty <= 0 (risk %.6f, budget %.6f)",
-                sig.symbol,
-                qty_risk,
-                qty_budget,
-            )
-            return
+        # Get budget/step bounds from your existing helper
+        # (qty_from_plan is ignored – we recompute risk-based qty with live price)
+        _qty_risk_plan, qty_budget, _qty_from_plan = await self._size_with_budget(sig)
 
-        # compute proposed risk for THIS order
-        proposed_risk = abs(float(sig.entry) - float(sig.sl)) * float(qty)
+        # -------- live price & risk distance --------
+        px = await self.mark_or_last_price(sig.symbol)
+
+        if sig.side == "Buy":
+            risk_dist = max(1e-12, float(px) - float(sig.sl))
+        else:
+            risk_dist = max(1e-12, float(sig.sl) - float(px))
+
+        risk_usd = self.risk_usd_per_trade()
+        qty_risk = risk_usd / risk_dist
+
+        # round to lot step and cap by budget
+        qty = self.round_qty(sig.symbol, min(qty_risk, qty_budget))
+
+        # proposed risk at current price
+        proposed_risk = risk_dist * float(qty)
+
         # portfolio risk guard
         if (self.open_risk_usd() + proposed_risk) > (
             self.equity * self.max_total_risk_pct
@@ -299,6 +317,26 @@ class RiskRouter:
             logging.warning("wallet balance fetch failed: %s (using 0)", e)
         return 0.0
 
+    async def mark_or_last_price(self, symbol: str) -> float:
+        try:
+            t = await self.ccxt.fetch_ticker(symbol)
+            info = t.get("info", {})
+            # Bybit often exposes mark price here:
+            mark = info.get("markPrice") or info.get("mark_price")
+            if mark is not None:
+                return float(mark)
+            if t.get("last"):
+                return float(t["last"])
+        except Exception:
+            pass
+        # Fallback to mid of book if ticker fails
+        ob = await self.ccxt.fetch_order_book(symbol, limit=5)
+        bid = ob["bids"][0][0] if ob["bids"] else None
+        ask = ob["asks"][0][0] if ob["asks"] else None
+        if bid and ask:
+            return float((bid + ask) / 2.0)
+        raise RuntimeError(f"Cannot obtain live price for {symbol}")
+
     def _atr_risk_qty(self, sig: Signal) -> float:
         risk_usd = self.equity * float(getattr(config, "RISK_PCT", 0.1))
         stop_dist = max(abs(float(sig.entry) - float(sig.sl)), 1e-8)
@@ -326,7 +364,7 @@ class RiskRouter:
         risk_usd = self.equity * float(getattr(config, "RISK_PCT", 0.1))
         stop_dist = max(abs(float(sig.entry) - float(sig.sl)), 1e-8)
         logging.info(
-            "[SIZER %s] px=%.6f stop=%.6f risk_usd=%.2f avail=%.4f lev=%.2f "
+            "[SIZER %s] px=%.6f stop_dist=%.6f risk_usd=%.2f avail=%.4f lev=%.2f "
             "cap=%.4f qty_risk=%.6f qty_budget=%.6f step=%.6f -> qty=%.6f",
             sig.symbol,
             float(sig.entry),
@@ -410,7 +448,7 @@ class RiskRouter:
                     await asyncio.sleep(0.2)
                 else:
                     raise
-            raise RuntimeError(f"place_bracket failed after retries: {last_err}")
+        raise RuntimeError(f"place_bracket failed after retries: {last_err}")
 
     # ─────────────────────────── WS bridges & reconciler ─────────────────────
     def _on_order(self, msg: dict) -> None:
@@ -607,6 +645,9 @@ class RiskRouter:
         )
 
     # helpers
+    def risk_usd_per_trade(self) -> float:
+        return self.equity * float(getattr(config, "RISK_PCT", 0.1))
+
     def _key_by_oid(self, oid: str) -> Optional[str]:
         for k, pos in self.book.items():
             if pos.order_id == oid:
