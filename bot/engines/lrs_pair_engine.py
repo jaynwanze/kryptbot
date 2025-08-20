@@ -71,10 +71,14 @@ def has_open_in_cluster(router, symbol, clusters):
 
 
 # # Session filter (EU + NY by default). Comment out to disable.
-# GOOD_HOURS = set(range(*config.SESSION_WINDOWS["eu"])) \
-#            | set(range(*config.SESSION_WINDOWS["ny"]))
-# def in_good_hours(ts):
-#     return ts.hour in GOOD_HOURS
+GOOD_HOURS = set(range(*config.SESSION_WINDOWS["eu"])) | set(
+    range(*config.SESSION_WINDOWS["ny"])
+)
+
+
+def in_good_hours(ts):
+    return ts.hour in GOOD_HOURS
+
 
 # Track last signal time per pair (for cool-down)
 last_signal_ts: dict[str, float] = {}
@@ -191,9 +195,11 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                     if bar[["atr", "atr30", "adx", "k_fast"]].isna().any():
                         continue  # indicator warm-up guard
 
-                    # Optional session filter to reduce trades further
-                    # if not in_good_hours(bar.name):
-                    #     continue
+                    # gate before sending a signal
+                    if not in_good_hours(bar.name):
+                        h1 = update_h1(h1, bar.name, float(bar.c))
+                        htf_levels = update_htf_levels_new(htf_levels, bar)
+                        continue
 
                     # H1 trend row (gate longs/shorts)
                     try:
