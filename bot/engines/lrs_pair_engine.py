@@ -33,6 +33,7 @@ from bot.helpers import (
     update_h1,  # H1 trend tracker (expects .slope)
 )
 from bot.data import preload_history
+from bot.commands import run_command_bot
 
 # ────────────────────────────────────────────────────────────────
 #  Bybit + runtime constants
@@ -377,21 +378,21 @@ async def consume(router: RiskRouter):
     MAX_AGE = getattr(config, "MAX_SIGNAL_AGE_SEC", 30)  # 20–30s on 15m
     COALESCE_SEC = getattr(config, "COALESCE_SEC", 2)
 
-    def score(s):
-        width = abs(float(s.tp) - float(s.sl))  # stop distance (ATR proxy)
-        adx = float(getattr(s, "adx", 1.0))
-        kf = float(getattr(s, "k_fast", 50.0))
-        ks = float(getattr(s, "k_slow", kf))
+    def score(s: Signal) -> float:
+        width = abs(float(s.tp) - float(s.sl))
 
-        # side-aware: longs prefer LOWER stochastic, shorts prefer HIGHER
-        if s.side == "Buy":
-            k_factor = max(
-                1.0, (200.0 - (kf + ks)) / 20.0
-            )  # 1x..10x as K gets oversold
+        # ADX: map 12→0, 37→1 (can tweak to taste in future)
+        adx_w = max(0.0, min(1.0, (float(getattr(s, "adx", 0.0)) - 12.0) / 25.0))
+
+        # Stoch: want LOW for longs, HIGH for shorts; use slow line
+        ks = float(getattr(s, "k_slow", getattr(s, "k_fast", 50.0)))
+        if s.side.lower() == "buy":
+            stoch_w = max(0.0, min(1.0, (100.0 - ks) / 100.0))
         else:
-            k_factor = max(1.0, ((kf + ks)) / 20.0)  # 1x..10x as K gets overbought
+            stoch_w = max(0.0, min(1.0, ks / 100.0))
 
-        return width * adx * k_factor
+        # gentle combination; avoids exploding scores
+        return width * (0.5 + 0.5 * adx_w) * (0.5 + 0.5 * stoch_w)
 
     while True:
         # 1) start a coalescing window
@@ -473,6 +474,7 @@ async def main():
     streams = [asyncio.create_task(kline_stream(p, router)) for p in pairs]
     # START the consumer and WAIT on everything
     streams.append(asyncio.create_task(consume(router)))
+    run_command_bot(router)  # returns immediately; polling runs in PTB's own thread
     await asyncio.gather(*streams)
 
 

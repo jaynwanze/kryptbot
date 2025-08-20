@@ -1,18 +1,16 @@
 # risk_router.py
 from __future__ import annotations
-from decimal import Decimal, ROUND_DOWN
-
+from decimal import Decimal
 import asyncio
 import time
 import logging
 import math
-from collections import defaultdict
+from collections import deque, defaultdict
 from typing import Dict, Optional, Tuple
-
 from bot.infra import Signal, Position, get_client, get_private_ws
 from bot.helpers import config, telegram
 import ccxt.async_support as ccxt
-
+from datetime import datetime
 
 # in risk_router.py or a helper module
 async def audit_and_override_ticks(router, symbols):
@@ -101,6 +99,33 @@ class RiskRouter:
         self._exit_price: Dict[str, float] = defaultdict(float)
         self._fees_usdt: Dict[str, float] = defaultdict(float)
         self._side: Dict[str, str] = defaultdict(str)  # "Buy"/"Sell"
+
+        # daily stats
+        self._daily = defaultdict(
+            lambda: {
+                "trades": 0,
+                "tp": 0,
+                "sl": 0,
+                "wins": 0,
+                "losses": 0,
+                "pos": 0.0,
+                "neg": 0.0,
+                "gross": 0.0,
+                "fees": 0.0,
+                "net": 0.0,
+                "by_symbol": defaultdict(
+                    lambda: {
+                        "trades": 0,
+                        "tp": 0,
+                        "sl": 0,
+                        "gross": 0.0,
+                        "fees": 0.0,
+                        "net": 0.0,
+                    }
+                ),
+            }
+        )
+        self.closed_trades = deque(maxlen=500)
 
         asyncio.create_task(self._track_fills())
 
@@ -273,9 +298,18 @@ class RiskRouter:
                 )
                 self._leveraged.add(symbol)
             except Exception as e:
-                logging.warning(
-                    "[%s] set_leverage failed: %s (continuing; may use 1x)", symbol, e
-                )
+                if "110043" in str(e):
+                    # treat as OK; avoid spamming & re-trying
+                    self._leveraged.add(symbol)
+                    logging.info(
+                        "[%s] leverage unchanged (110043) — continuing", symbol
+                    )
+                else:
+                    logging.warning(
+                        "[%s] set_leverage failed: %s (continuing; may use 1x)",
+                        symbol,
+                        e,
+                    )
 
     # helpers
     @staticmethod
@@ -480,6 +514,7 @@ class RiskRouter:
             self.loop.call_soon_threadsafe(
                 self._ws_q.put_nowait, {"_t": "execution", "row": row}
             )
+
     # async functions
     async def _reseed_bracket_after_fill(self, symbol: str) -> None:
         # find the position for this symbol
@@ -656,24 +691,36 @@ class RiskRouter:
         entry = self._entry_price.get(symbol, 0.0)
         exitp = self._exit_price.get(symbol, 0.0)
         side = (self._side.get(symbol) or "").lower()
+
+        qty = 0.0
+        for pos in self.book.values():
+            if pos.signal.symbol == symbol:
+                qty = float(getattr(pos, "qty", 0.0) or 0.0)
+                break
+
+        gross = net = 0.0
         approx = ""
         try:
-            if (
-                entry > 0
-                and exitp > 0
-                and symbol in (pos.signal.symbol for pos in self.book.values())
-            ):
-                # derive qty from our local book for this symbol
-                qty = 0.0
-                for pos in self.book.values():
-                    if pos.signal.symbol == symbol:
-                        qty = float(pos.qty if hasattr(pos, "qty") else 0.0) or 0.0
-                        break
-                # gross PnL estimate using last known fill prices
+            if entry > 0 and exitp > 0 and qty > 0:
                 direction = 1 if side == "buy" else -1
                 gross = direction * (exitp - entry) * qty
                 net = gross - fees
                 approx = f" gross≈{gross:.6f} USDT  fees≈{fees:.6f}  net≈{net:.6f}"
+        except Exception:
+            pass
+        # record the trade (always try to persist something)
+        try:
+            self.closed_trades.append(
+                {
+                    "ts": time.time(),
+                    "symbol": symbol,
+                    "side": side,
+                    "entry": entry,
+                    "exit": exitp,
+                    "fees": fees,
+                    "net": net,
+                }
+            )
         except Exception:
             pass
 
@@ -687,6 +734,10 @@ class RiskRouter:
         telegram.bybit_alert(
             msg=f"Round-trip closed for {symbol}. {exit_kind}. fees={fees:.6f}. {approx}"
         )
+        try:
+            self._accumulate_daily(symbol, exit_kind, gross, fees, net)
+        except Exception:
+            pass
 
     # helpers
     def risk_usd_per_trade(self) -> float:
@@ -715,45 +766,71 @@ class RiskRouter:
         self._side.pop(symbol, None)
 
     # ───────────────────────── convenience: fee lookup ──────────────────────
-    async def print_recent_fees(
-        self, symbol: Optional[str] = None, minutes: int = 180
-    ) -> None:
-        """
-        Pull recent executions from Bybit REST and print total fees per symbol.
-        """
+    # pretty printers
+    async def format_recent_fees(self, minutes: int = 180) -> str:
+        # reuse REST fetch but aggregate to text instead of TG spam
         try:
-            # v5 execution list
-            params = {
-                "category": "linear",
-                "limit": 200,
-            }
-            if symbol:
-                params["symbol"] = symbol
+            params = {"category": "linear", "limit": 200}
             resp = await asyncio.to_thread(self.http.get_executions, **params)
             rows = resp.get("result", {}).get("list", []) or []
-            cutoff = time.time() - minutes * 60
-            agg: Dict[str, float] = defaultdict(float)
+            cut = time.time() - minutes * 60
+            agg = {}
             for r in rows:
-                ts = (
-                    self._safe_float(r.get("execTime"), 0.0) / 1000.0
-                )  # ms -> s if present
-                if ts and ts < cutoff:
+                ts = float(r.get("execTime", 0)) / 1000.0
+                if ts < cut:
                     continue
                 sym = r.get("symbol", "")
-                fee = abs(self._safe_float(r.get("execFee"), 0.0))
-                agg[sym] += fee
+                fee = abs(float(r.get("execFee", 0) or 0))
+                agg[sym] = agg.get(sym, 0.0) + fee
             if not agg:
-                logging.info("No executions (fees) in the last %d minutes.", minutes)
-            else:
-                for sym, total in agg.items():
-                    logging.info(
-                        "[FEES %s] last %d min: %.6f USDT", sym, minutes, total
-                    )
-                    telegram.bybit_alert(
-                        msg=f"[FEES {sym}] last {minutes} min: {total:.6f} USDT"
-                    )
+                return ""
+            lines = [f"Fees last {minutes} min:"]
+            for sym, tot in sorted(agg.items()):
+                lines.append(f"• {sym}: {tot:.6f} USDT")
+            return "\n".join(lines)
         except Exception as e:
-            logging.warning("print_recent_fees failed: %s", e)
+            logging.warning("format_recent_fees failed: %s", e)
+            return "Could not fetch recent fees."
+
+    async def format_open_positions(self) -> str:
+        if not self.book:
+            return ""
+        lines = ["Open positions:"]
+        for pos in self.book.values():
+            s = pos.signal
+            entry = self._entry_price.get(s.symbol, 0.0) or float(s.entry)
+            risk_usd = abs(entry - float(s.sl)) * float(pos.qty)
+            lines.append(
+                f"• {s.symbol} {s.side} qty={pos.qty:.6f} entry≈{entry:.6f} "
+                f"SL={float(s.sl):.6f} TP={float(s.tp):.6f} risk≈{risk_usd:.2f} USDT"
+            )
+        return "\n".join(lines)
+
+    def format_past_trades(self, n: int = 10, day: Optional[str] = None) -> str:
+        items = list(self.closed_trades)
+        if day:
+            from datetime import datetime
+
+            y, m, d = map(int, day.split("-"))
+            start = datetime(y, m, d).timestamp()
+            end = start + 86400
+            items = [t for t in items if start <= t["ts"] < end]
+        else:
+            items = items[-n:]
+        if not items:
+            return ""
+        wins = sum(1 for t in items if t["net"] > 0)
+        total = sum(t["net"] for t in items)
+        lines = [
+            f"Trades ({'day '+day if day else f'last {len(items)}'}):  "
+            f"wins={wins}/{len(items)} | PnL={total:.2f} USDT"
+        ]
+        for t in items:
+            ts = time.strftime("%m-%d %H:%M", time.gmtime(t["ts"]))
+            lines.append(
+                f"• {ts} {t['symbol']} {t['side']} net={t['net']:.2f} fees={t['fees']:.4f}"
+            )
+        return "\n".join(lines)
 
     # ─────────────────────────── graceful shutdown ──────────────────────────
     async def close(self):
@@ -765,3 +842,74 @@ class RiskRouter:
 
     def open_for_key(self, key: str) -> bool:
         return key in self.book
+
+    def _accumulate_daily(
+        self, symbol: str, exit_kind: str, gross: float, fees: float, net: float
+    ) -> None:
+        day = datetime.utcfromtimestamp(time.time()).date().isoformat()
+        d = self._daily[day]
+        b = d["by_symbol"][symbol]
+
+        d["trades"] += 1
+        b["trades"] += 1
+
+        is_tp = exit_kind.lower() == "takeprofit"
+        is_sl = exit_kind.lower() == "stoploss"
+
+        if is_tp:
+            d["tp"] += 1
+            b["tp"] += 1
+        if is_sl:
+            d["sl"] += 1
+            b["sl"] += 1
+
+        if net >= 0:
+            d["wins"] += 1
+            d["pos"] += net
+        else:
+            d["losses"] += 1
+            d["neg"] += net
+
+        d["gross"] += gross
+        d["fees"] += fees
+        d["net"] += net
+        b["gross"] += gross
+        b["fees"] += fees
+        b["net"] += net
+
+    async def telegram_daily_summary(self, day: Optional[str] = None) -> None:
+        if day is None:
+            day = datetime.utcfromtimestamp(time.time()).date().isoformat()
+
+        d = self._daily.get(day)
+        if not d:
+            telegram.bybit_alert(msg=f"[SUMMARY {day}] No trades.")
+            return
+
+        trades = d["trades"]
+        wins = d["wins"]
+        losses = d["losses"]
+        wr = (wins / trades * 100.0) if trades else 0.0
+        pf = "∞" if d["neg"] == 0 else f"{d['pos'] / abs(d['neg']):.2f}"
+
+        lines = [
+            f"*Daily Summary* `{day}`",
+            f"Trades: `{trades}` | Wins: `{wins}` | Losses: `{losses}` | Win%: `{wr:.1f}%`",
+            f"Gross: `{d['gross']:.4f}`  Fees: `{d['fees']:.4f}`  Net: `{d['net']:.4f}`",
+            f"Profit Factor: `{pf}`",
+        ]
+
+        # top 5 symbols by abs net
+        bysym = d["by_symbol"]
+        top = sorted(bysym.items(), key=lambda kv: abs(kv[1]["net"]), reverse=True)[:5]
+        if top:
+            lines.append("Top (by |net|):")
+            for sym, x in top:
+                lines.append(
+                    f"• `{sym}`  t:{x['trades']}  TP:{x['tp']} SL:{x['sl']}  net:`{x['net']:.4f}`"
+                )
+
+        try:
+            telegram.bybit_alert("\n".join(lines))
+        except Exception as e:
+            logging.warning("summary telegram send failed: %s", e)
