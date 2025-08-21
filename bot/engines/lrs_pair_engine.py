@@ -6,6 +6,7 @@ import os, json, asyncio, logging, time, traceback
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Tuple
 import ccxt.async_support as ccxt
+from matplotlib.pyplot import bar
 import numpy as np
 import pandas as pd
 import websockets
@@ -13,28 +14,12 @@ from asyncio import Queue
 from pathlib import Path
 import csv, time
 
-LOG_DIR = Path(getattr(config, "LOG_DIR", "./logs"))
-LOG_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def _append_csv(name, row, fields):
-    p = LOG_DIR / name
-    new = not p.exists()
-    with p.open("a", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=fields)
-        if new:
-            w.writeheader()
-        w.writerow(row)
-
-
 # import httpx
 # EVENT_BASE = os.getenv("EVENT_API_BASE", "http://localhost:8000")
 # HTTPX = httpx.AsyncClient(timeout=3.0)  # reuse one client
-
 import sys
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
-
 from bot.infra.models import Signal, Position
 from bot.engines.risk_router import RiskRouter, audit_and_override_ticks
 from bot.helpers import (
@@ -50,6 +35,20 @@ from bot.helpers import (
 )
 from bot.data import preload_history
 from bot.commands import run_command_bot
+
+LOG_DIR = Path(getattr(config, "LOG_DIR", "./logs"))
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _append_csv(name, row, fields):
+    p = LOG_DIR / name
+    new = not p.exists()
+    with p.open("a", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=fields)
+        if new:
+            w.writeheader()
+        w.writerow(row)
+
 
 # ────────────────────────────────────────────────────────────────
 #  Bybit + runtime constants
@@ -73,11 +72,36 @@ MIN_GAP_DAYS_PER_PAIR = 14  # hard cool-down after ANY trade
 # Stricter market-quality veto to reduce frequency
 def veto_thresholds(bar):
     vol_norm = bar.atr / bar.atr30
-    # If trade freq still to low change from 12 to 10
-    min_adx = 12 + 6 * vol_norm
-    # If trade freq still to low change from .45 to .40
-    atr_veto = 0.45 + 0.25 * vol_norm
+    min_adx = 16 + 6 * vol_norm  # was 12 + 6*…
+    atr_veto = 0.50 + 0.25 * vol_norm  # was 0.45 + 0.25*…
     return min_adx, atr_veto
+
+
+## prev
+# def veto_thresholds(bar):
+#     vol_norm = bar.atr / bar.atr30
+#     # If trade freq still to low change from 12 to 10
+#     min_adx = 12 + 6 * vol_norm
+#     # If trade freq still to low change from .45 to .40
+#     atr_veto = 0.45 + 0.25 * vol_norm
+#     return min_adx, atr_veto
+
+
+# helpers
+def near_htf_level(bar, htf_row, max_atr=0.5):
+    dist = min(
+        abs(bar.c - htf_row.D_H),
+        abs(bar.c - htf_row.D_L),
+        abs(bar.c - htf_row.H4_H),
+        abs(bar.c - htf_row.H4_L),
+        abs(bar.c - htf_row.asia_H),
+        abs(bar.c - htf_row.asia_L),
+        abs(bar.c - htf_row.eu_H),
+        abs(bar.c - htf_row.eu_L),
+        abs(bar.c - htf_row.ny_H),
+        abs(bar.c - htf_row.ny_L),
+    )
+    return dist <= max_atr * bar.atr
 
 
 def has_open_in_cluster(router, symbol, clusters):
@@ -211,6 +235,11 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                     bar = hist.iloc[-1]
                     if bar[["atr", "atr30", "adx", "k_fast"]].isna().any():
                         continue  # indicator warm-up guard
+                    # Check HTF levels
+                    if not near_htf_level(bar, htf_row, max_atr=0.5):
+                        h1 = update_h1(h1, bar.name, float(bar.c))
+                        htf_levels = update_htf_levels_new(htf_levels, bar)
+                        continue
 
                     # gate before sending a signal
                     if not in_good_hours(bar.name):
@@ -280,8 +309,14 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                     i = len(hist) - 1
                     header = "LRS MULTI-PAIR Engine (low-freq)"
 
+                    # Check if we have enough confirmations
+                    min_checks = 2 if bar.adx >= 25 else 3
                     # Longs: need tjr_long AND H1 slope up AND stoch low
-                    if h1row.slope > 0 and tjr_long_signal(hist, i, htf_row):
+                    if (
+                        bar.k_fast <= 35
+                        and h1row.slope > 0
+                        and tjr_long_signal(hist, i, htf_row, min_checks)
+                    ):
                         if router.has_open(pair):
                             logging.info("[%s] No-trade (already open)", pair)
                         else:
@@ -320,7 +355,11 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                             last_signal_ts[pair] = time.time()
 
                     # Shorts: need tjr_short AND H1 slope down AND stoch high
-                    elif h1row.slope < 0 and tjr_short_signal(hist, i, htf_row):
+                    elif (
+                        bar.k_fast >= 65
+                        and h1row.slope < 0
+                        and tjr_short_signal(hist, i, htf_row, min_checks)
+                    ):
                         if router.has_open(pair):
                             logging.info("[%s] No-trade (already open)", pair)
                         else:

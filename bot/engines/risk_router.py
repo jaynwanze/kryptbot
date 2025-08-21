@@ -494,9 +494,26 @@ class RiskRouter:
                 )
                 _append_csv(
                     "orders.csv",
-                    {"ts": _now(), "symbol": s.symbol, "event": "PLACED", "order_id": oid,
-                    "side": s.side, "qty": qty_str, "price": "", "reduce_only": "false"},
-                    ["ts","symbol","event","order_id","side","qty","price","reduce_only"]
+                    {
+                        "ts": _now(),
+                        "symbol": s.symbol,
+                        "event": "PLACED",
+                        "order_id": oid,
+                        "side": s.side,
+                        "qty": qty_str,
+                        "price": "",
+                        "reduce_only": "false",
+                    },
+                    [
+                        "ts",
+                        "symbol",
+                        "event",
+                        "order_id",
+                        "side",
+                        "qty",
+                        "price",
+                        "reduce_only",
+                    ],
                 )
                 return oid
 
@@ -575,6 +592,19 @@ class RiskRouter:
             else:
                 new_sl = self._fmt_px(symbol, entry + off_sl)
                 new_tp = self._fmt_px(symbol, entry - off_tp)
+
+                #To test
+# # Place 50% take at 1R (reduce-only limit), then move SL to BE when hit.
+#             half = max(0.0, float(getattr(pos, "qty", 0.0)) * 0.5)
+#             if half > 0:
+#                 tp1 = new_tp if getattr(s, "rr_first", 1.0) >= 1.0 else self._fmt_px(symbol, entry + (off_tp if s.side=="Buy" else -off_tp))
+#                 await asyncio.to_thread(
+#                     self.http.place_order,
+#                     category="linear", symbol=symbol,
+#                     side="Sell" if s.side=="Buy" else "Buy",
+#                     orderType="Limit", qty=quantize_step(half, self._qty_step[symbol]),
+#                     price=tp1, reduceOnly=True, timeInForce="PostOnly"
+#                 )
 
             await asyncio.to_thread(
                 self.http.set_trading_stop,
@@ -797,17 +827,39 @@ class RiskRouter:
             risk = abs((entry or 0.0) - (sig_sl or 0.0)) * (qty or 0.0)
             r_mult = (net / risk) if risk else 0.0
 
-            _append_csv("trades.csv", {
-                "ts_close": _now(), "symbol": symbol, "side": side,
-                "entry": entry, "exit": exitp, "fees": fees,
-                "net": net, "gross": gross, "exit_kind": exit_kind,
-                "risk": risk, "r": r_mult
-            }, ["ts_close","symbol","side","entry","exit","fees","net","gross","exit_kind","risk","r"])
+            _append_csv(
+                "trades.csv",
+                {
+                    "ts_close": _now(),
+                    "symbol": symbol,
+                    "side": side,
+                    "entry": entry,
+                    "exit": exitp,
+                    "fees": fees,
+                    "net": net,
+                    "gross": gross,
+                    "exit_kind": exit_kind,
+                    "risk": risk,
+                    "r": r_mult,
+                },
+                [
+                    "ts_close",
+                    "symbol",
+                    "side",
+                    "entry",
+                    "exit",
+                    "fees",
+                    "net",
+                    "gross",
+                    "exit_kind",
+                    "risk",
+                    "r",
+                ],
+            )
         except Exception:
             pass
 
-
-## Garbage collection for pending orders
+    ## Garbage collection for pending orders
     async def _gc_pending(self):
         while True:
             now = time.time()

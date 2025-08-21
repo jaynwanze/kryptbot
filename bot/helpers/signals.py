@@ -15,7 +15,7 @@ def raid_happened(bar, htf_row, tol_atr: float = 0.20):
         return True, "short"
     return False, ""
 
-def tjr_long_signal(df, i, htf_row) -> bool:
+def tjr_long_signal(df, i, htf_row, min_checks=3) -> bool:
     bar, prev = df.iloc[i], df.iloc[i-1]
     raided, side = raid_happened(bar, htf_row)
     if not (raided and side == "long"):
@@ -26,9 +26,9 @@ def tjr_long_signal(df, i, htf_row) -> bool:
     checks += ltf.is_bos(df, i, "long",left=2, right=2)
     checks += ltf.has_fvg(df, i-1, "long", min_gap_frac=0.25)
     checks += ltf.fib_tag(bar, "long", frac=0.33)
-    return checks >= 2
+    return checks >= min_checks
 
-def tjr_short_signal(df, i, htf_row) -> bool:
+def tjr_short_signal(df, i, htf_row, min_checks=3) -> bool:
     bar, prev = df.iloc[i], df.iloc[i-1]
     raided, side = raid_happened(bar, htf_row)
     if not (raided and side == "short"):
@@ -37,4 +37,4 @@ def tjr_short_signal(df, i, htf_row) -> bool:
     checks += ltf.is_bos(df, i, "short", left=2, right=2)
     checks += ltf.has_fvg(df, i-1, "short", min_gap_frac=0.25)
     checks += ltf.fib_tag(bar, "short", frac=0.33)
-    return checks >= 2
+    return checks >= min_checks
