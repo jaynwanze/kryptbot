@@ -10,6 +10,22 @@ import numpy as np
 import pandas as pd
 import websockets
 from asyncio import Queue
+from pathlib import Path
+import csv, time
+
+LOG_DIR = Path(getattr(config, "LOG_DIR", "./logs"))
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _append_csv(name, row, fields):
+    p = LOG_DIR / name
+    new = not p.exists()
+    with p.open("a", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=fields)
+        if new:
+            w.writeheader()
+        w.writerow(row)
+
 
 # import httpx
 # EVENT_BASE = os.getenv("EVENT_API_BASE", "http://localhost:8000")
@@ -338,6 +354,39 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                                 vol=float(getattr(bar, "v", 0.0)),
                                 off_sl=stop_off,
                                 off_tp=tp_dist,
+                            )
+                            _append_csv(
+                                "signals.csv",
+                                {
+                                    "ts": sig.ts.isoformat(),
+                                    "symbol": sig.symbol,
+                                    "side": sig.side,
+                                    "entry": float(sig.entry),
+                                    "sl": float(sig.sl),
+                                    "tp": float(sig.tp),
+                                    "adx": getattr(sig, "adx", 0.0),
+                                    "k_fast": getattr(sig, "k_fast", 0.0),
+                                    "k_slow": getattr(sig, "k_slow", 0.0),
+                                    "d_slow": getattr(sig, "d_slow", 0.0),
+                                    "off_sl": getattr(sig, "off_sl", 0.0),
+                                    "off_tp": getattr(sig, "off_tp", 0.0),
+                                    "key": sig.key,
+                                },
+                                [
+                                    "ts",
+                                    "symbol",
+                                    "side",
+                                    "entry",
+                                    "sl",
+                                    "tp",
+                                    "adx",
+                                    "k_fast",
+                                    "k_slow",
+                                    "d_slow",
+                                    "off_sl",
+                                    "off_tp",
+                                    "key",
+                                ],
                             )
                             await SIGNAL_Q.put(sig)
                             last_signal_ts[pair] = time.time()

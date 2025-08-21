@@ -11,6 +11,26 @@ from bot.infra import Signal, Position, get_client, get_private_ws
 from bot.helpers import config, telegram
 import ccxt.async_support as ccxt
 from datetime import datetime
+from pathlib import Path, PurePath
+import csv
+
+LOG_DIR = Path(getattr(config, "LOG_DIR", "./logs"))
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _append_csv(name: str, row: dict, fields: list[str]):
+    p = LOG_DIR / name
+    new = not p.exists()
+    with p.open("a", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=fields)
+        if new:
+            w.writeheader()
+        w.writerow(row)
+
+
+def _now():
+    return datetime.utcnow().isoformat(timespec="seconds")
+
 
 # in risk_router.py or a helper module
 async def audit_and_override_ticks(router, symbols):
@@ -100,6 +120,10 @@ class RiskRouter:
         self._fees_usdt: Dict[str, float] = defaultdict(float)
         self._side: Dict[str, str] = defaultdict(str)  # "Buy"/"Sell"
 
+        self.pending: dict[str, Position] = {}
+        self._pending_ts: dict[str, float] = {}
+        self.PENDING_TTL_SEC = int(getattr(config, "PENDING_TTL_SEC", 60))
+        asyncio.create_task(self._gc_pending())
         # daily stats
         self._daily = defaultdict(
             lambda: {
@@ -180,6 +204,13 @@ class RiskRouter:
                 logging.info("%s already active – ignoring dup", sig.key)
                 return
 
+        # ---  check for existing positions
+        if any(p.signal.symbol == sig.symbol for p in self.book.values()) or any(
+            p.signal.symbol == sig.symbol for p in self.pending.values()
+        ):
+            logging.info("[%s] Skip: already have an open/pending position", sig.symbol)
+            return
+
         # per-pair rule: only 1 open per symbol
         if any(p.signal.symbol == sig.symbol for p in self.book.values()):
             logging.info("[%s] Skip: already have an open position", sig.symbol)
@@ -245,11 +276,13 @@ class RiskRouter:
 
         # place & track
         oid = await self._place_bracket(sig, qty)
-        self.book[sig.key] = Position(sig, oid, qty)
+        pos = Position(sig, oid, qty)
+        self.pending[sig.key] = pos  # <— was: self.book[...]
+        self._pending_ts[sig.key] = time.time()
         self._oid_to_key[oid] = sig.key
 
         logging.info(
-            "[%s] order placed id=%s qty=%.6f | router: open=%d risk=%.1f%%",
+            "[%s] order placed id=%s qty=%.6f | router: open=%d risk=%.1f%% (counting fills only)",
             sig.symbol,
             oid,
             qty,
@@ -459,6 +492,12 @@ class RiskRouter:
                     slTriggerBy="LastPrice",
                     positionIdx=0,
                 )
+                _append_csv(
+                    "orders.csv",
+                    {"ts": _now(), "symbol": s.symbol, "event": "PLACED", "order_id": oid,
+                    "side": s.side, "qty": qty_str, "price": "", "reduce_only": "false"},
+                    ["ts","symbol","event","order_id","side","qty","price","reduce_only"]
+                )
                 return oid
 
             except Exception as e:
@@ -596,7 +635,11 @@ class RiskRouter:
                         )
 
                     else:
-                        # Entry leg filled
+                        # ENTRY filled → move PENDING → BOOK
+                        key = self._oid_to_key.get(oid) or self._key_by_oid(oid)
+                        if key and key in self.pending:
+                            self.book[key] = self.pending.pop(key)
+                            self._pending_ts.pop(key, None)
                         self._entry_price[symbol] = self._safe_float(
                             row.get("avgPrice") or row.get("price"), 0.0
                         )
@@ -609,6 +652,9 @@ class RiskRouter:
                     telegram.bybit_alert(msg=f"Order {oid} {status} for {symbol}")
                     self.book.pop(key, None)
                     self._oid_to_key.pop(oid, None)
+                    if key in self.pending:
+                        self.pending.pop(key, None)
+                        self._pending_ts.pop(key, None)
 
                 elif status == "PartiallyFilled":
                     logging.info(
@@ -738,6 +784,53 @@ class RiskRouter:
             self._accumulate_daily(symbol, exit_kind, gross, fees, net)
         except Exception:
             pass
+        # at end of _log_round_trip()
+        try:
+            # find the signal to get SL for R-multiple
+            sig_sl = None
+            qty = 0.0
+            for pos in list(self.book.values()) + list(self.pending.values()):
+                if pos.signal.symbol == symbol:
+                    sig_sl = float(pos.signal.sl)
+                    qty = float(getattr(pos, "qty", 0.0) or 0.0)
+                    break
+            risk = abs((entry or 0.0) - (sig_sl or 0.0)) * (qty or 0.0)
+            r_mult = (net / risk) if risk else 0.0
+
+            _append_csv("trades.csv", {
+                "ts_close": _now(), "symbol": symbol, "side": side,
+                "entry": entry, "exit": exitp, "fees": fees,
+                "net": net, "gross": gross, "exit_kind": exit_kind,
+                "risk": risk, "r": r_mult
+            }, ["ts_close","symbol","side","entry","exit","fees","net","gross","exit_kind","risk","r"])
+        except Exception:
+            pass
+
+
+## Garbage collection for pending orders
+    async def _gc_pending(self):
+        while True:
+            now = time.time()
+            for key, ts in list(self._pending_ts.items()):
+                if now - ts > self.PENDING_TTL_SEC:
+                    pos = self.pending.pop(key, None)
+                    self._pending_ts.pop(key, None)
+                    if pos:
+                        try:
+                            await asyncio.to_thread(
+                                self.http.cancel_order,
+                                category="linear",
+                                symbol=pos.signal.symbol,
+                                orderId=pos.order_id,
+                            )
+                            logging.info(
+                                "[%s] pending expired → canceled %s",
+                                pos.signal.symbol,
+                                pos.order_id,
+                            )
+                        except Exception as e:
+                            logging.warning("cancel pending failed: %s", e)
+            await asyncio.sleep(5)
 
     # helpers
     def risk_usd_per_trade(self) -> float:
