@@ -476,33 +476,23 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
 #  Runner
 # ────────────────────────────────────────────────────────────────
 async def consume(router: RiskRouter):
-    MAX_OPEN = getattr(config, "MAX_OPEN_CONCURRENT", 3)
-    MAX_RISK = getattr(config, "MAX_TOTAL_RISK_PCT", 0.30)
+    MAX_OPEN     = getattr(config, "MAX_OPEN_CONCURRENT", 3)
+    MAX_RISK     = getattr(config, "MAX_TOTAL_RISK_PCT", 0.30)
     MAX_PER_SIDE = getattr(config, "MAX_PER_SIDE_OPEN", 1)
-    MAX_AGE = getattr(config, "MAX_SIGNAL_AGE_SEC", 30)  # 20–30s on 15m
+    MAX_AGE      = getattr(config, "MAX_SIGNAL_AGE_SEC", 30)  # 20–30s on 15m
     COALESCE_SEC = getattr(config, "COALESCE_SEC", 2)
 
     def score(s: Signal) -> float:
         width = abs(float(s.tp) - float(s.sl))
-
-        # ADX: map 12→0, 37→1 (can tweak to taste in future)
         adx_w = max(0.0, min(1.0, (float(getattr(s, "adx", 0.0)) - 12.0) / 25.0))
-
-        # Stoch: want LOW for longs, HIGH for shorts; use slow line
-        ks = float(getattr(s, "k_slow", getattr(s, "k_fast", 50.0)))
-        if s.side.lower() == "buy":
-            stoch_w = max(0.0, min(1.0, (100.0 - ks) / 100.0))
-        else:
-            stoch_w = max(0.0, min(1.0, ks / 100.0))
-
-        # gentle combination; avoids exploding scores
+        ks    = float(getattr(s, "k_slow", getattr(s, "k_fast", 50.0)))
+        stoch_w = max(0.0, min(1.0, (100.0 - ks) / 100.0)) if s.side.lower()=="buy" else max(0.0, min(1.0, ks / 100.0))
         return width * (0.5 + 0.5 * adx_w) * (0.5 + 0.5 * stoch_w)
 
     while True:
-        # 1) start a coalescing window
+        # ── 1) Coalesce a small batch of signals
         sig0 = await SIGNAL_Q.get()
         batch = [sig0]
-
         until = time.time() + COALESCE_SEC
         while time.time() < until:
             try:
@@ -510,11 +500,11 @@ async def consume(router: RiskRouter):
             except asyncio.QueueEmpty:
                 await asyncio.sleep(0.05)
 
-        # mark each dequeued item as done **exactly once**
+        # mark dequeued items as done exactly once
         for _ in batch:
             SIGNAL_Q.task_done()
 
-        # 2) filter stale
+        # ── 2) Stale filter
         now_utc = pd.Timestamp.now("UTC")
         fresh = []
         for s in batch:
@@ -525,50 +515,87 @@ async def consume(router: RiskRouter):
                 fresh.append(s)
             else:
                 logging.info("[%s] Drop stale signal age=%.1fs", s.symbol, age)
-                telegram.bybit_alert(
-                    msg=f"[SIGNAL {s.symbol}] Drop stale signal age={age:.1f}s"
-                )
+                telegram.bybit_alert(msg=f"[SIGNAL {s.symbol}] Drop stale signal age={age:.1f}s")
         if not fresh:
             continue
 
-        # 3) dedupe per symbol (keep the latest)
+        # ── 3) Dedupe per symbol (keep latest)
         dedup = {}
         for s in fresh:
             dedup[s.symbol] = s
         fresh = list(dedup.values())
 
-        # 4) strongest first
+        # ── 4) Strongest first
         fresh.sort(key=score, reverse=True)
 
-        # 5) portfolio/cluster gates + handle
-        for s in fresh:
-            if (
-                router.open_count() >= MAX_OPEN
-                or router.open_risk_pct() >= MAX_RISK
-                or router.open_count_side(s.side) >= MAX_PER_SIDE
-            ):
-                logging.info("[PORTFOLIO] Risk/concurrency full — drop %s", s.symbol)
-                telegram.bybit_alert(
-                    msg=f"[PORTFOLIO] Risk/concurrency full — drop {s.symbol}"
-                )
-                continue
+        # ── 5) Take a snapshot of portfolio state, then
+        #        use *ephemeral counters* to reserve capacity within this batch.
+        open_used   = router.open_count()
+        buy_used    = router.open_count_side("Buy")
+        sell_used   = router.open_count_side("Sell")
+        risk_used   = router.open_risk_pct()
 
-            if has_open_in_cluster(router, s.symbol, config.CLUSTER):
-                logging.info("[PORTFOLIO] Cluster busy — drop %s", s.symbol)
+        busy_clusters = {
+            config.CLUSTER.get(p.signal.symbol)
+            for p in router.book.values()
+            if config.CLUSTER.get(p.signal.symbol)
+        }
+
+        for s in fresh:
+            side_norm = "Buy" if s.side.lower() == "buy" else "Sell"
+            cid = config.CLUSTER.get(s.symbol)
+
+            # hard caps
+            if open_used >= MAX_OPEN:
+                logging.info("[PORTFOLIO] Concurrency full — drop %s", s.symbol)
+                telegram.bybit_alert(msg=f"[PORTFOLIO] Concurrency full — drop {s.symbol}")
+                continue
+            if risk_used >= MAX_RISK:
+                logging.info("[PORTFOLIO] Risk full — drop %s", s.symbol)
+                telegram.bybit_alert(msg=f"[PORTFOLIO] Risk full — drop {s.symbol}")
+                continue
+            if side_norm == "Buy" and buy_used >= MAX_PER_SIDE:
+                logging.info("[PORTFOLIO] Long-side full — drop %s", s.symbol)
+                telegram.bybit_alert(msg=f"[PORTFOLIO] Long-side full — drop {s.symbol}")
+                continue
+            if side_norm == "Sell" and sell_used >= MAX_PER_SIDE:
+                logging.info("[PORTFOLIO] Short-side full — drop %s", s.symbol)
+                telegram.bybit_alert(msg=f"[PORTFOLIO] Short-side full — drop {s.symbol}")
+                continue
+            if cid and cid in busy_clusters:
+                logging.info("[PORTFOLIO] Cluster busy (%s) — drop %s", cid, s.symbol)
                 telegram.bybit_alert(msg=f"[PORTFOLIO] Cluster busy — drop {s.symbol}")
                 continue
 
+            # ── Reserve capacity immediately so the rest of the batch sees it
+            open_used += 1
+            if side_norm == "Buy":
+                buy_used += 1
+            else:
+                sell_used += 1
+            if cid:
+                busy_clusters.add(cid)
+
+            # (Optional) if your router can estimate added risk, bump risk_used here:
+            # if hasattr(router, "estimate_risk_pct"):
+            #     risk_used += router.estimate_risk_pct(s)
             try:
                 await router.handle(s)
                 logging.info(
-                    "Processed: %s | open=%d risk=%.1f%%",
-                    s.symbol,
-                    router.open_count(),
-                    router.open_risk_pct() * 100,
+                    "Processed: %s | reserved open=%d (buy=%d/sell=%d) risk≈%.1f%%",
+                    s.symbol, open_used, buy_used, sell_used, risk_used * 100,
                 )
             except Exception as e:
-                logging.error("Router error: %s", e, exc_info=True)
-
+                logging.error("Router error for %s: %s", s.symbol, e, exc_info=True)
+                # rollback reservation so another candidate can try
+                open_used -= 1
+                if side_norm == "Buy":
+                    buy_used -= 1
+                else:
+                    sell_used -= 1
+                if cid:
+                    busy_clusters.discard(cid)
+                continue
 
 async def main():
     router = RiskRouter(equity_usd=20, testnet=False)  # use your real equity
