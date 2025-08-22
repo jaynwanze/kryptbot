@@ -6,19 +6,15 @@ import os, json, asyncio, logging, time, traceback
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Tuple
 import ccxt.async_support as ccxt
-from matplotlib.pyplot import bar
-import numpy as np
 import pandas as pd
 import websockets
 from asyncio import Queue
 from pathlib import Path
-import csv, time
-
+import csv
 # import httpx
 # EVENT_BASE = os.getenv("EVENT_API_BASE", "http://localhost:8000")
 # HTTPX = httpx.AsyncClient(timeout=3.0)  # reuse one client
 import sys
-
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 from bot.infra.models import Signal, Position
 from bot.engines.risk_router import RiskRouter, audit_and_override_ticks
@@ -235,19 +231,39 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                     bar = hist.iloc[-1]
                     if bar[["atr", "atr30", "adx", "k_fast"]].isna().any():
                         continue  # indicator warm-up guard
-                    # Check HTF levels
+
+                 # 1) HTF snapshot (so htf_row exists)
+                    try:
+                        idx_prev = htf_levels.index.get_indexer([bar.name], method="ffill")[0]
+                        if idx_prev == -1:
+                            h1 = update_h1(h1, bar.name, float(bar.c))
+                            htf_levels = update_htf_levels_new(htf_levels, bar)   # <-- add this
+                            continue
+                        htf_row = htf_levels.iloc[idx_prev]
+                    except Exception:
+                        h1 = update_h1(h1, bar.name, float(bar.c))
+                        htf_levels = update_htf_levels_new(htf_levels, bar)       # <-- add this
+                        continue
+
+                    # HTF row validity check
+                    if any(pd.isna(htf_row[c]) for c in ["D_H","D_L","H4_H","H4_L","asia_H","asia_L","eu_H","eu_L","ny_H","ny_L"]):
+                        h1 = update_h1(h1, bar.name, float(bar.c))
+                        htf_levels = update_htf_levels_new(htf_levels, bar)
+                        continue
+
+                    # 2) Proximity to HTF levels gate (now htf_row is defined)
                     if not near_htf_level(bar, htf_row, max_atr=0.5):
                         h1 = update_h1(h1, bar.name, float(bar.c))
                         htf_levels = update_htf_levels_new(htf_levels, bar)
                         continue
 
-                    # gate before sending a signal
+                     # 3) Session  gate before sending a signal
                     if not in_good_hours(bar.name):
                         h1 = update_h1(h1, bar.name, float(bar.c))
                         htf_levels = update_htf_levels_new(htf_levels, bar)
                         continue
 
-                    # H1 trend row (gate longs/shorts)
+                    # 4/ H1 trend row (gate longs/shorts)
                     try:
                         h1row = h1.loc[bar.name.floor("1h")]
                     except KeyError:
@@ -255,7 +271,7 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                         h1 = update_h1(h1, bar.name, float(bar.c))
                         continue
 
-                    # Market-quality veto (stricter)
+                    #5) Market-quality veto (stricter)
                     min_adx, atr_veto = veto_thresholds(bar)
                     if bar.adx < min_adx or bar.atr < atr_veto * bar.atr30:
                         logging.info(
@@ -273,29 +289,6 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                             )
                         h1 = update_h1(h1, bar.name, float(bar.c))
                         htf_levels = update_htf_levels_new(htf_levels, bar)
-                        continue
-
-                    # # Per-pair cool-down (target ~1–2 trades/month/pair)
-                    # last_t = last_signal_ts.get(pair, 0.0)
-                    # if last_t and (time.time() - last_t) < (MIN_GAP_DAYS_PER_PAIR * 86400):
-                    #     remain = int((MIN_GAP_DAYS_PER_PAIR * 86400) - (time.time() - last_t))
-                    #     logging.info("[%s] Cool-down %dd %02dh left – skipping",
-                    #                  pair, remain//86400, (remain%86400)//3600)
-                    #     h1 = update_h1(h1, bar.name, float(bar.c))
-                    #     htf_levels = update_htf_levels_new(htf_levels, bar)
-                    #     continue
-
-                    # HTF snapshot for tjr_* (no look-ahead; use ffill to <= bar.name)
-                    try:
-                        idx_prev = htf_levels.index.get_indexer(
-                            [bar.name], method="ffill"
-                        )[0]
-                        if idx_prev == -1:
-                            h1 = update_h1(h1, bar.name, float(bar.c))
-                            continue
-                        htf_row = htf_levels.iloc[idx_prev]
-                    except KeyError:
-                        h1 = update_h1(h1, bar.name, float(bar.c))
                         continue
 
                     # Distances
@@ -351,6 +344,30 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                                 off_sl=stop_off,
                                 off_tp=tp_dist,
                             )
+                            # write to csv, right after building sig:
+                            _append_csv(
+                                "signals.csv",
+                                {
+                                    "ts": sig.ts.isoformat(),
+                                    "symbol": sig.symbol,
+                                    "side": sig.side,
+                                    "entry": float(sig.entry),
+                                    "sl": float(sig.sl),
+                                    "tp": float(sig.tp),
+                                    "adx": getattr(sig, "adx", 0.0),
+                                    "k_fast": getattr(sig, "k_fast", 0.0),
+                                    "k_slow": getattr(sig, "k_slow", 0.0),
+                                    "d_slow": getattr(sig, "d_slow", 0.0),
+                                    "off_sl": getattr(sig, "off_sl", 0.0),
+                                    "off_tp": getattr(sig, "off_tp", 0.0),
+                                    "key": sig.key,
+                                },
+                                [
+                                    "ts","symbol","side","entry","sl","tp",
+                                    "adx","k_fast","k_slow","d_slow","off_sl","off_tp","key",
+                                ],
+                            )
+
                             await SIGNAL_Q.put(sig)
                             last_signal_ts[pair] = time.time()
 
