@@ -45,6 +45,14 @@ def _append_csv(name, row, fields):
             w.writeheader()
         w.writerow(row)
 
+def _hours(name):
+    h0, h1 = config.SESSION_WINDOWS[name]
+    if h0 <= h1:
+        return set(range(h0, h1 + 1))
+    # wrap across midnight
+    return set(range(h0, 24)) | set(range(0, h1 + 1))
+
+GOOD_HOURS = _hours("eu") | _hours("ny")
 
 # ────────────────────────────────────────────────────────────────
 #  Bybit + runtime constants
@@ -106,20 +114,11 @@ def has_open_in_cluster(router, symbol, clusters):
         clusters.get(p.signal.symbol) == cid for p in router.book.values()
     )
 
-
-# # Session filter (EU + NY by default). Comment out to disable.
-GOOD_HOURS = set(range(*config.SESSION_WINDOWS["eu"])) | set(
-    range(*config.SESSION_WINDOWS["ny"])
-)
-
-
 def in_good_hours(ts):
     return ts.hour in GOOD_HOURS
 
-
 # Track last signal time per pair (for cool-down)
 last_signal_ts: dict[str, float] = {}
-
 
 # ────────────────────────────────────────────────────────────────
 #  Web-socket coroutine per pair
