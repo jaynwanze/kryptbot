@@ -93,20 +93,12 @@ def veto_thresholds(bar):
 
 # helpers
 def near_htf_level(bar, htf_row, max_atr=0.5):
-    dist = min(
-        abs(bar.c - htf_row.D_H),
-        abs(bar.c - htf_row.D_L),
-        abs(bar.c - htf_row.H4_H),
-        abs(bar.c - htf_row.H4_L),
-        abs(bar.c - htf_row.asia_H),
-        abs(bar.c - htf_row.asia_L),
-        abs(bar.c - htf_row.eu_H),
-        abs(bar.c - htf_row.eu_L),
-        abs(bar.c - htf_row.ny_H),
-        abs(bar.c - htf_row.ny_L),
-    )
-    return dist <= max_atr * bar.atr
-
+    cols = ["D_H","D_L","H4_H","H4_L","asia_H","asia_L","eu_H","eu_L","ny_H","ny_L"]
+    levels = [htf_row.get(c) for c in cols if c in htf_row.index and pd.notna(htf_row.get(c))]
+    if not levels:
+        return False
+    dist = min(abs(float(bar.c) - float(L)) for L in levels)
+    return dist <= max_atr * float(bar.atr)
 
 def has_open_in_cluster(router, symbol, clusters):
     cid = clusters.get(symbol)
@@ -128,6 +120,16 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
 
     # Preload recent history
     hist = await preload_history(symbol=pair, interval=TF, limit=LOOKBACK)
+    drop_stats = {
+    "htf_missing": 0,
+    "not_near_htf": 0,
+    "off_session": 0,
+    "h1_missing": 0,
+    "veto_adx": 0,
+    "veto_atr": 0,
+    "no_ltf_long": 0,
+    "no_ltf_short": 0,
+}
     htf_levels = build_htf_levels(hist.copy())
     h1 = build_h1(hist.copy())
 
@@ -236,30 +238,28 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                         idx_prev = htf_levels.index.get_indexer([bar.name], method="ffill")[0]
                         if idx_prev == -1:
                             h1 = update_h1(h1, bar.name, float(bar.c))
-                            htf_levels = update_htf_levels_new(htf_levels, bar)   # <-- add this
+                            htf_levels = update_htf_levels_new(htf_levels, bar) 
+                            drop_stats["htf_missing"] += 1
                             continue
                         htf_row = htf_levels.iloc[idx_prev]
                     except Exception:
                         h1 = update_h1(h1, bar.name, float(bar.c))
-                        htf_levels = update_htf_levels_new(htf_levels, bar)       # <-- add this
-                        continue
-
-                    # HTF row validity check
-                    if any(pd.isna(htf_row[c]) for c in ["D_H","D_L","H4_H","H4_L","asia_H","asia_L","eu_H","eu_L","ny_H","ny_L"]):
-                        h1 = update_h1(h1, bar.name, float(bar.c))
                         htf_levels = update_htf_levels_new(htf_levels, bar)
+                        drop_stats["htf_missing"] += 1
                         continue
 
                     # 2) Proximity to HTF levels gate (now htf_row is defined)
                     if not near_htf_level(bar, htf_row, max_atr=0.5):
                         h1 = update_h1(h1, bar.name, float(bar.c))
                         htf_levels = update_htf_levels_new(htf_levels, bar)
+                        drop_stats["not_near_htf"] += 1
                         continue
 
                      # 3) Session  gate before sending a signal
                     if not in_good_hours(bar.name):
                         h1 = update_h1(h1, bar.name, float(bar.c))
                         htf_levels = update_htf_levels_new(htf_levels, bar)
+                        drop_stats["off_session"] += 1
                         continue
 
                     # 4/ H1 trend row (gate longs/shorts)
@@ -268,10 +268,13 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                     except KeyError:
                         # Not enough H1 data yet; update and continue
                         h1 = update_h1(h1, bar.name, float(bar.c))
+                        drop_stats["h1_missing"] += 1
                         continue
 
                     #5) Market-quality veto (stricter)
                     min_adx, atr_veto = veto_thresholds(bar)
+                    if bar.adx < min_adx: drop_stats["veto_adx"] += 1
+                    if bar.atr < atr_veto * bar.atr30: drop_stats["veto_atr"] += 1
                     if bar.adx < min_adx or bar.atr < atr_veto * bar.atr30:
                         logging.info(
                             "[%s] No-trade (veto)  k=%.1f  adx=%.1f  atr=%.5f",
@@ -446,6 +449,10 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                             await SIGNAL_Q.put(sig)
                             last_signal_ts[pair] = time.time()
                     else:
+                        if h1row.slope > 0:
+                            drop_stats["no_ltf_long"] += 1
+                        elif h1row.slope < 0:
+                            drop_stats["no_ltf_short"] += 1
                         logging.info(
                             "[%s] No-trade (no gated signal) %s  k=%.1f  adx=%.1f",
                             pair,
