@@ -35,6 +35,10 @@ from bot.commands import run_command_bot
 LOG_DIR = Path(getattr(config, "LOG_DIR", "./logs"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
+# --- cooldown after SL ---
+COOLDOWN_DAYS_AFTER_SL = 1
+COOLDOWN_SEC = COOLDOWN_DAYS_AFTER_SL * 86400
+
 
 def _append_csv(name, row, fields):
     p = LOG_DIR / name
@@ -229,9 +233,17 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                     hist = pd.concat([hist, new]).tail(LOOKBACK)
                     hist = compute_indicators(hist)
 
+                    # Look at drop stats every hour
+                    if int(time.time()) % 3600 < TF_SEC: logging.info("DROP_STATS %s %s", pair, drop_stats)
+
                     bar = hist.iloc[-1]
                     if bar[["atr", "atr30", "adx", "k_fast"]].isna().any():
                         continue  # indicator warm-up guard
+                    # if positions open trail
+                    try:
+                        await router.maybe_trail(pair, bar)
+                    except Exception as e:
+                        logging.warning("[%s] trail update failed: %s", pair, e)
 
                  # 1) HTF snapshot (so htf_row exists)
                     try:
@@ -289,6 +301,16 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                             logging.info(
                                 f"atr_low {bar.atr:.4f}<{(atr_veto*bar.atr30):.4f}"
                             )
+                        h1 = update_h1(h1, bar.name, float(bar.c))
+                        htf_levels = update_htf_levels_new(htf_levels, bar)
+                        continue
+
+                    # 5.5) Simple cool-down after SL hit ON PAIR
+                    last_sl = router.last_sl_ts.get(pair, 0.0)  # populated by RiskRouter when a reduce-only SL fills
+                    if last_sl and (time.time() - last_sl) < COOLDOWN_SEC:
+                        left_days = (COOLDOWN_SEC - (time.time() - last_sl)) / 86400.0
+                        logging.info("[%s] Cool-down after SL active — %.1f days left", pair, left_days)
+                        # keep maps fresh then move on
                         h1 = update_h1(h1, bar.name, float(bar.c))
                         htf_levels = update_htf_levels_new(htf_levels, bar)
                         continue

@@ -6,6 +6,7 @@ import time
 import logging
 import math
 from collections import deque, defaultdict
+from turtle import pos
 from typing import Dict, Optional, Tuple
 from bot.infra import Signal, Position, get_client, get_private_ws
 from bot.helpers import config, telegram
@@ -13,6 +14,13 @@ import ccxt.async_support as ccxt
 from datetime import datetime
 from pathlib import Path, PurePath
 import csv
+
+
+#Config & logging
+TRAIL_ENABLE          = getattr(config, "TRAIL_ENABLE", True)
+BE_ARM_R              = getattr(config, "BE_ARM_R", 0.8)     # move stop to BE after +0.8R
+ATR_TRAIL_K           = getattr(config, "ATR_TRAIL_K", 0.9)  # trail distance = k * ATR
+REMOVE_TP_WHEN_TRAIL  = getattr(config, "REMOVE_TP_WHEN_TRAIL", False)  # keep your 1.5R TP by default
 
 LOG_DIR = Path(getattr(config, "LOG_DIR", "./logs"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -280,6 +288,13 @@ class RiskRouter:
         self.pending[sig.key] = pos  # <— was: self.book[...]
         self._pending_ts[sig.key] = time.time()
         self._oid_to_key[oid] = sig.key
+        # pos meta for tracking trailing/BE
+        pos.meta = {
+            "stop_off": float(sig.off_sl),   # you already compute this
+            "be_armed": False,
+            "trail_on": False,
+        }
+
 
         logging.info(
             "[%s] order placed id=%s qty=%.6f | router: open=%d risk=%.1f%% (counting fills only)",
@@ -289,6 +304,48 @@ class RiskRouter:
             self.open_count(),
             self.open_risk_pct() * 100.0,
         )
+    async def amend_stop(self, symbol: str, new_sl: float) -> None:
+        """Tighten SL only. Keeps current TP unchanged."""
+        sl_str = self._fmt_px(symbol, new_sl)
+        try:
+            await asyncio.to_thread(
+                self.http.set_trading_stop,
+                category="linear",
+                symbol=symbol,
+                stopLoss=sl_str,
+                slTriggerBy="LastPrice",
+                positionIdx=0,
+            )
+            logging.info("[%s] SL amended -> %s", symbol, sl_str)
+            telegram.bybit_alert(msg=f"[{symbol}] SL amended -> {sl_str}")
+            # also update the local signal snapshot so we don't widen later
+            for pos in self.book.values():
+                if pos.signal.symbol == symbol:
+                    pos.signal.sl = float(sl_str)
+                    break
+        except Exception as e:
+            logging.warning("[%s] amend_stop failed: %s", symbol, e)
+
+    async def cancel_tp(self, symbol: str) -> None:
+        """Remove TP (for full trail mode)."""
+        try:
+            await asyncio.to_thread(
+                self.http.set_trading_stop,
+                category="linear",
+                symbol=symbol,
+                takeProfit="",
+                tpTriggerBy="LastPrice",
+                positionIdx=0,
+            )
+            logging.info("[%s] TP cleared (trail mode)", symbol)
+            telegram.bybit_alert(msg=f"[{symbol}] TP cleared (trail mode)")
+            # optional: reflect locally
+            for pos in self.book.values():
+                if pos.signal.symbol == symbol:
+                    pos.signal.tp = 0.0
+                    break
+        except Exception as e:
+            logging.warning("[%s] cancel_tp failed: %s", symbol, e)
 
     # ───────────────────────────── internals ────────────────────────────────
     async def _warm_meta(self, symbol: str) -> None:
@@ -416,7 +473,7 @@ class RiskRouter:
         step = self._qty_step[sig.symbol]
         qty_risk = self._atr_risk_qty(sig)
 
-        avail = await self._get_available_usdt()
+        avail = max(0.0, await self._get_available_usdt())
         lev_cf = float(getattr(config, "LEVERAGE", 1.0))
         lev = min(max(lev_cf, self._lev_min[sig.symbol]), self._lev_max[sig.symbol])
 
@@ -1058,3 +1115,45 @@ class RiskRouter:
             telegram.bybit_alert("\n".join(lines))
         except Exception as e:
             logging.warning("summary telegram send failed: %s", e)
+
+    async def maybe_trail(self, symbol: str, bar) -> None:
+        if not getattr(config, "TRAIL_ENABLE", True):
+            return
+        # find open position for this symbol
+        pos = next((p for p in self.book.values()
+                    if p.signal.symbol == symbol and p.is_open), None)
+        if not pos:
+            return
+
+        side = pos.signal.side.lower()  # "buy" or "sell"
+        entry = float(pos.signal.entry)
+        atr = float(getattr(bar, "atr", 0.0)) or 0.0
+        if atr <= 0:
+            return
+
+        stop_off = float(pos.meta.get("stop_off", 0.0))
+        r_gain = ((float(bar.c) - entry) if side == "buy" else (entry - float(bar.c))) / stop_off
+        tick = self._tick_size[symbol]  # <-- bug fix
+
+        # 1) move to BE once in profit by BE_ARM_R
+        if not pos.meta.get("be_armed", False) and r_gain >= BE_ARM_R:
+            be = entry  # (optionally add a tick to cover fees)
+            await self.amend_stop(symbol, be)   # your router already has amend/cancel helpers
+            pos.meta["be_armed"] = True
+            pos.meta["trail_on"] = True
+            if REMOVE_TP_WHEN_TRAIL:
+                await self.cancel_tp(symbol)
+            return
+
+        # 2) ATR trailing once armed
+        if pos.meta.get("trail_on", False):
+            if side == "buy":
+                new_sl = max(float(pos.signal.sl), float(bar.c) - ATR_TRAIL_K * atr)
+                tighten = new_sl > float(pos.signal.sl) + tick
+            else:
+                new_sl = min(float(pos.signal.sl), float(bar.c) + ATR_TRAIL_K * atr)
+                tighten = new_sl < float(pos.signal.sl) - tick
+
+            if tighten:
+                await self.amend_stop(symbol, new_sl)
+
