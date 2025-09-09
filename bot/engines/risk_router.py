@@ -6,7 +6,6 @@ import time
 import logging
 import math
 from collections import deque, defaultdict
-from turtle import pos
 from typing import Dict, Optional, Tuple
 from bot.infra import Signal, Position, get_client, get_private_ws
 from bot.helpers import config, telegram
