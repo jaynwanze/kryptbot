@@ -38,7 +38,6 @@ def _append_csv(name: str, row: dict, fields: list[str]):
 def _now():
     return datetime.utcnow().isoformat(timespec="seconds")
 
-
 # in risk_router.py or a helper module
 async def audit_and_override_ticks(router, symbols):
     for sym in symbols:

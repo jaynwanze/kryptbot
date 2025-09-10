@@ -10,7 +10,6 @@ import pandas as pd
 import websockets
 from asyncio import Queue
 from pathlib import Path
-import csv
 # import httpx
 # EVENT_BASE = os.getenv("EVENT_API_BASE", "http://localhost:8000")
 # HTTPX = httpx.AsyncClient(timeout=3.0)  # reuse one client
@@ -28,35 +27,26 @@ from bot.helpers import (
     telegram,
     build_h1,
     update_h1,  # H1 trend tracker (expects .slope)
+    in_good_hours,
+    veto_thresholds,
+    near_htf_level,
+    append_csv,
+    hours,
 )
 from bot.data import preload_history
 from bot.commands import run_command_bot
 
+# ────────────────────────────────────────────────────────────────
+#  Global constants
+# ────────────────────────────────────────────────────────────────
 LOG_DIR = Path(getattr(config, "LOG_DIR", "./logs"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
-
 # --- cooldown after SL ---
 COOLDOWN_DAYS_AFTER_SL = 1
 COOLDOWN_SEC = COOLDOWN_DAYS_AFTER_SL * 86400
-
-def _append_csv(name, row, fields):
-    p = LOG_DIR / name
-    new = not p.exists()
-    with p.open("a", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=fields)
-        if new:
-            w.writeheader()
-        w.writerow(row)
-
-def _hours(name):
-    h0, h1 = config.SESSION_WINDOWS[name]
-    if h0 <= h1:
-        return set(range(h0, h1 + 1))
-    # wrap across midnight
-    return set(range(h0, 24)) | set(range(0, h1 + 1))
-
-GOOD_HOURS = _hours("eu") | _hours("ny")
-
+GOOD_HOURS = hours("eu", session_windows=config.SESSION_WINDOWS) | hours(
+    "ny", session_windows=config.SESSION_WINDOWS
+)
 # ────────────────────────────────────────────────────────────────
 #  Bybit + runtime constants
 # ────────────────────────────────────────────────────────────────
@@ -67,44 +57,20 @@ TF = config.INTERVAL  # "15"
 TF_SEC = int(TF) * 60
 LOOKBACK = 1_000
 MAX_RETRY = 3
-
+# ────────────────────────────────────────────────────────────────
 # Signal queue
+# ────────────────────────────────────────────────────────────────
 SIGNAL_Q: Queue = Queue(maxsize=100)
-
-# Frequency helpers/throttles (tune these to hit ~1–2 trades/month/pair)
-# Stricter market-quality veto to reduce frequency
-def veto_thresholds(bar):
-    vol_norm = bar.atr / bar.atr30
-    min_adx = 14 + 5 * vol_norm  
-    atr_veto = 0.45 + 0.20 * vol_norm  
-    return min_adx, atr_veto
-
-# helpers
-def near_htf_level(bar, htf_row, max_atr=0.8):
-    cols = ["D_H","D_L","H4_H","H4_L","asia_H","asia_L","eu_H","eu_L","ny_H","ny_L"]
-    levels = [htf_row.get(c) for c in cols if c in htf_row.index and pd.notna(htf_row.get(c))]
-    if not levels:
-        return False
-    dist = min(abs(float(bar.c) - float(L)) for L in levels)
-    return dist <= max_atr * float(bar.atr)
-
-def has_open_in_cluster(router, symbol, clusters):
-    cid = clusters.get(symbol)
-    return cid and any(
-        clusters.get(p.signal.symbol) == cid for p in router.book.values()
-    )
-
-def in_good_hours(ts):
-    return ts.hour in GOOD_HOURS
-
 # Track last signal time per pair (for cool-down)
 last_signal_ts: dict[str, float] = {}
 
+# ────────────────────────────────────────────────────────────────
 # async methods
-async def refresh_meta(router, pairs, every_min=60):
+# ────────────────────────────────────────────────────────────────
+async def _refresh_meta(router, pairs, every_min=60):
     while True:
         await audit_and_override_ticks(router, pairs)
-        await asyncio.sleep(every_min*60)
+        await asyncio.sleep(every_min * 60)
 # ────────────────────────────────────────────────────────────────
 #  Web-socket coroutine per pair
 # ────────────────────────────────────────────────────────────────
@@ -114,15 +80,15 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
     # Preload recent history
     hist = await preload_history(symbol=pair, interval=TF, limit=LOOKBACK)
     drop_stats = {
-    "htf_missing": 0,
-    "not_near_htf": 0,
-    "off_session": 0,
-    "h1_missing": 0,
-    "veto_adx": 0,
-    "veto_atr": 0,
-    "no_ltf_long": 0,
-    "no_ltf_short": 0,
-}
+        "htf_missing": 0,
+        "not_near_htf": 0,
+        "off_session": 0,
+        "h1_missing": 0,
+        "veto_adx": 0,
+        "veto_atr": 0,
+        "no_ltf_long": 0,
+        "no_ltf_short": 0,
+    }
     htf_levels = build_htf_levels(hist.copy())
     h1 = build_h1(hist.copy())
 
@@ -223,7 +189,8 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                     hist = compute_indicators(hist)
 
                     # Look at drop stats every hour
-                    if int(time.time()) % 3600 < TF_SEC: logging.info("DROP_STATS %s %s", pair, drop_stats)
+                    if int(time.time()) % 3600 < TF_SEC:
+                        logging.info("DROP_STATS %s %s", pair, drop_stats)
 
                     bar = hist.iloc[-1]
                     if bar[["atr", "atr30", "adx", "k_fast"]].isna().any():
@@ -234,12 +201,14 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                     except Exception as e:
                         logging.warning("[%s] trail update failed: %s", pair, e)
 
-                 # 1) HTF snapshot (so htf_row exists)
+                    # 1) HTF snapshot (so htf_row exists)
                     try:
-                        idx_prev = htf_levels.index.get_indexer([bar.name], method="ffill")[0]
+                        idx_prev = htf_levels.index.get_indexer(
+                            [bar.name], method="ffill"
+                        )[0]
                         if idx_prev == -1:
                             h1 = update_h1(h1, bar.name, float(bar.c))
-                            htf_levels = update_htf_levels_new(htf_levels, bar) 
+                            htf_levels = update_htf_levels_new(htf_levels, bar)
                             drop_stats["htf_missing"] += 1
                             continue
                         htf_row = htf_levels.iloc[idx_prev]
@@ -256,8 +225,8 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                         drop_stats["not_near_htf"] += 1
                         continue
 
-                     # 3) Session  gate before sending a signal
-                    if not in_good_hours(bar.name):
+                    # 3) Session  gate before sending a signal
+                    if not in_good_hours(bar.name,good_hours= GOOD_HOURS):
                         h1 = update_h1(h1, bar.name, float(bar.c))
                         htf_levels = update_htf_levels_new(htf_levels, bar)
                         drop_stats["off_session"] += 1
@@ -272,10 +241,12 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                         drop_stats["h1_missing"] += 1
                         continue
 
-                    #5) Market-quality veto (stricter)
+                    # 5) Market-quality veto (stricter)
                     min_adx, atr_veto = veto_thresholds(bar)
-                    if bar.adx < min_adx: drop_stats["veto_adx"] += 1
-                    if bar.atr < atr_veto * bar.atr30: drop_stats["veto_atr"] += 1
+                    if bar.adx < min_adx:
+                        drop_stats["veto_adx"] += 1
+                    if bar.atr < atr_veto * bar.atr30:
+                        drop_stats["veto_atr"] += 1
                     if bar.adx < min_adx or bar.atr < atr_veto * bar.atr30:
                         logging.info(
                             "[%s] No-trade (veto)  k=%.1f  adx=%.1f  atr=%.5f",
@@ -295,10 +266,16 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                         continue
 
                     # 5.5) Simple cool-down after SL hit ON PAIR
-                    last_sl = router.last_sl_ts.get(pair, 0.0)  # populated by RiskRouter when a reduce-only SL fills
+                    last_sl = router.last_sl_ts.get(
+                        pair, 0.0
+                    )  # populated by RiskRouter when a reduce-only SL fills
                     if last_sl and (time.time() - last_sl) < COOLDOWN_SEC:
                         left_days = (COOLDOWN_SEC - (time.time() - last_sl)) / 86400.0
-                        logging.info("[%s] Cool-down after SL active — %.1f days left", pair, left_days)
+                        logging.info(
+                            "[%s] Cool-down after SL active — %.1f days left",
+                            pair,
+                            left_days,
+                        )
                         # keep maps fresh then move on
                         h1 = update_h1(h1, bar.name, float(bar.c))
                         htf_levels = update_htf_levels_new(htf_levels, bar)
@@ -358,7 +335,7 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                                 off_tp=tp_dist,
                             )
                             # write to csv, right after building sig:
-                            _append_csv(
+                            append_csv(
                                 "signals.csv",
                                 {
                                     "ts": sig.ts.isoformat(),
@@ -376,9 +353,21 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                                     "key": sig.key,
                                 },
                                 [
-                                    "ts","symbol","side","entry","sl","tp",
-                                    "adx","k_fast","k_slow","d_slow","off_sl","off_tp","key",
+                                    "ts",
+                                    "symbol",
+                                    "side",
+                                    "entry",
+                                    "sl",
+                                    "tp",
+                                    "adx",
+                                    "k_fast",
+                                    "k_slow",
+                                    "d_slow",
+                                    "off_sl",
+                                    "off_tp",
+                                    "key",
                                 ],
+                                log_dir=LOG_DIR,
                             )
 
                             await SIGNAL_Q.put(sig)
@@ -424,7 +413,7 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                                 off_sl=stop_off,
                                 off_tp=tp_dist,
                             )
-                            _append_csv(
+                            append_csv(
                                 "signals.csv",
                                 {
                                     "ts": sig.ts.isoformat(),
@@ -456,6 +445,7 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                                     "off_tp",
                                     "key",
                                 ],
+                                log_dir=LOG_DIR,
                             )
                             await SIGNAL_Q.put(sig)
                             last_signal_ts[pair] = time.time()
@@ -494,17 +484,21 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
 #  Runner
 # ────────────────────────────────────────────────────────────────
 async def consume(router: RiskRouter):
-    MAX_OPEN     = getattr(config, "MAX_OPEN_CONCURRENT", 3)
-    MAX_RISK     = getattr(config, "MAX_TOTAL_RISK_PCT", 0.30)
+    MAX_OPEN = getattr(config, "MAX_OPEN_CONCURRENT", 3)
+    MAX_RISK = getattr(config, "MAX_TOTAL_RISK_PCT", 0.30)
     MAX_PER_SIDE = getattr(config, "MAX_PER_SIDE_OPEN", 1)
-    MAX_AGE      = getattr(config, "MAX_SIGNAL_AGE_SEC", 30)  # 20–30s on 15m
+    MAX_AGE = getattr(config, "MAX_SIGNAL_AGE_SEC", 30)  # 20–30s on 15m
     COALESCE_SEC = getattr(config, "COALESCE_SEC", 2)
 
     def score(s: Signal) -> float:
         width = abs(float(s.tp) - float(s.sl))
         adx_w = max(0.0, min(1.0, (float(getattr(s, "adx", 0.0)) - 12.0) / 25.0))
-        ks    = float(getattr(s, "k_slow", getattr(s, "k_fast", 50.0)))
-        stoch_w = max(0.0, min(1.0, (100.0 - ks) / 100.0)) if s.side.lower()=="buy" else max(0.0, min(1.0, ks / 100.0))
+        ks = float(getattr(s, "k_slow", getattr(s, "k_fast", 50.0)))
+        stoch_w = (
+            max(0.0, min(1.0, (100.0 - ks) / 100.0))
+            if s.side.lower() == "buy"
+            else max(0.0, min(1.0, ks / 100.0))
+        )
         return width * (0.5 + 0.5 * adx_w) * (0.5 + 0.5 * stoch_w)
 
     while True:
@@ -533,7 +527,9 @@ async def consume(router: RiskRouter):
                 fresh.append(s)
             else:
                 logging.info("[%s] Drop stale signal age=%.1fs", s.symbol, age)
-                telegram.bybit_alert(msg=f"[SIGNAL {s.symbol}] Drop stale signal age={age:.1f}s")
+                telegram.bybit_alert(
+                    msg=f"[SIGNAL {s.symbol}] Drop stale signal age={age:.1f}s"
+                )
         if not fresh:
             continue
 
@@ -548,10 +544,10 @@ async def consume(router: RiskRouter):
 
         # ── 5) Take a snapshot of portfolio state, then
         #        use *ephemeral counters* to reserve capacity within this batch.
-        open_used   = router.open_count()
-        buy_used    = router.open_count_side("Buy")
-        sell_used   = router.open_count_side("Sell")
-        risk_used   = router.open_risk_pct()
+        open_used = router.open_count()
+        buy_used = router.open_count_side("Buy")
+        sell_used = router.open_count_side("Sell")
+        risk_used = router.open_risk_pct()
 
         busy_clusters = {
             config.CLUSTER.get(p.signal.symbol)
@@ -566,7 +562,9 @@ async def consume(router: RiskRouter):
             # hard caps
             if open_used >= MAX_OPEN:
                 logging.info("[PORTFOLIO] Concurrency full — drop %s", s.symbol)
-                telegram.bybit_alert(msg=f"[PORTFOLIO] Concurrency full — drop {s.symbol}")
+                telegram.bybit_alert(
+                    msg=f"[PORTFOLIO] Concurrency full — drop {s.symbol}"
+                )
                 continue
             if risk_used >= MAX_RISK:
                 logging.info("[PORTFOLIO] Risk full — drop %s", s.symbol)
@@ -574,11 +572,15 @@ async def consume(router: RiskRouter):
                 continue
             if side_norm == "Buy" and buy_used >= MAX_PER_SIDE:
                 logging.info("[PORTFOLIO] Long-side full — drop %s", s.symbol)
-                telegram.bybit_alert(msg=f"[PORTFOLIO] Long-side full — drop {s.symbol}")
+                telegram.bybit_alert(
+                    msg=f"[PORTFOLIO] Long-side full — drop {s.symbol}"
+                )
                 continue
             if side_norm == "Sell" and sell_used >= MAX_PER_SIDE:
                 logging.info("[PORTFOLIO] Short-side full — drop %s", s.symbol)
-                telegram.bybit_alert(msg=f"[PORTFOLIO] Short-side full — drop {s.symbol}")
+                telegram.bybit_alert(
+                    msg=f"[PORTFOLIO] Short-side full — drop {s.symbol}"
+                )
                 continue
             if cid and cid in busy_clusters:
                 logging.info("[PORTFOLIO] Cluster busy (%s) — drop %s", cid, s.symbol)
@@ -601,7 +603,11 @@ async def consume(router: RiskRouter):
                 await router.handle(s)
                 logging.info(
                     "Processed: %s | reserved open=%d (buy=%d/sell=%d) risk≈%.1f%%",
-                    s.symbol, open_used, buy_used, sell_used, risk_used * 100,
+                    s.symbol,
+                    open_used,
+                    buy_used,
+                    sell_used,
+                    risk_used * 100,
                 )
             except Exception as e:
                 logging.error("Router error for %s: %s", s.symbol, e, exc_info=True)
@@ -623,10 +629,9 @@ async def main():
     streams = [asyncio.create_task(kline_stream(p, router)) for p in pairs]
     # START the consumer and WAIT on everything
     streams.append(asyncio.create_task(consume(router)))
-    streams.append(asyncio.create_task(refresh_meta(router, pairs)))
+    streams.append(asyncio.create_task(_refresh_meta(router, pairs)))
     run_command_bot(router)  # returns immediately; polling runs in PTB's own thread
     await asyncio.gather(*streams)
-
 
 if __name__ == "__main__":
     logging.basicConfig(

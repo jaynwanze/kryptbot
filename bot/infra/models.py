@@ -27,3 +27,4 @@ class Position:
     signal: Signal
     order_id: str  # Bybit parent order
     qty: float
+    meta: Optional[dict] = None
