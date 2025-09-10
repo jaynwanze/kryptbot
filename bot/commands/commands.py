@@ -2,9 +2,123 @@ import os, asyncio
 from functools import partial
 from telegram.ext import Updater, CommandHandler
 import logging
+from decimal import Decimal
+import pandas as pd
+from bot.engines.lrs_pair_engine import REST
+from bot.engines.risk_router import RiskRouter
 
 ALLOWED_CHAT_ID = int(os.getenv("TG_CHAT_ID", "0"))  # your channel id
 ALLOWED_USER_IDS = {int(x) for x in os.getenv("TG_ALLOW_USER_IDS", "").split(",") if x.strip().isdigit()}
+
+async def fetch_executions(http, since_ms: int, until_ms: int):
+    params = {"category": "linear", "startTime": since_ms, "endTime": until_ms, "limit": 200}
+    res = await asyncio.to_thread(http.get_executions, **params)
+    items = (res.get("result", {}) or {}).get("list", []) or []
+    out = []
+    for it in items:
+        out.append({
+            "symbol": it["symbol"],
+            "side": it["side"],                             # "Buy"/"Sell"
+            "px": Decimal(str(it["execPrice"])),
+            "qty": Decimal(str(it["execQty"])),
+            "fee": Decimal(str(it.get("execFee", "0"))),
+            "time": int(it.get("execTime", it.get("createdTime", 0))),
+            "execId": it.get("execId") or it.get("id"),
+            "orderId": it.get("orderId"),
+        })
+    # de-dupe
+    seen, uniq = set(), []
+    for x in out:
+        if x["execId"] in seen: 
+            continue
+        seen.add(x["execId"])
+        uniq.append(x)
+    return uniq
+
+async def fetch_closed_pnl(http, since_ms: int, until_ms: int):
+    params = {"category": "linear", "startTime": since_ms, "endTime": until_ms, "limit": 200}
+    res = await asyncio.to_thread(http.get_closed_pnl, **params)  # your client’s wrapper
+    items = (res.get("result", {}) or {}).get("list", []) or []
+    rows = []
+    for it in items:
+        rows.append({
+            "symbol": it["symbol"],
+            "side": it.get("side"),
+            "closedPnl": float(it.get("closedPnl", 0.0)),
+            "cumEntryValue": float(it.get("cumEntryValue", 0.0)),
+            "cumExitValue": float(it.get("cumExitValue", 0.0)),
+            "fees": float(it.get("fee", it.get("cumFee", 0.0))),
+            "time": int(it.get("updatedTime", it.get("createdTime", 0))),
+        })
+    return rows
+
+async def fetch_positions_snapshot(http):
+    res = await asyncio.to_thread(http.get_positions, category="linear")
+    items = (res.get("result", {}) or {}).get("list", []) or []
+    out = []
+    for it in items:
+        if float(it.get("size", 0) or 0) == 0: 
+            continue
+        out.append({
+            "symbol": it["symbol"],
+            "side": it.get("side"),
+            "size": float(it.get("size")),
+            "avgPx": float(it.get("avgPrice", it.get("entryPrice", 0))),
+            "uPnl": float(it.get("unrealisedPnl", 0.0)),
+        })
+    return out
+
+def realised_pnl_from_fills(fills):
+    size = Decimal("0")      # +long / -short
+    avg  = Decimal("0")
+    realised = Decimal("0")
+    fees = Decimal("0")
+
+    for f in sorted(fills, key=lambda z: z["time"]):
+        qty, px, side = f["qty"], f["px"], f["side"]
+        fees += f["fee"]
+        if side == "Buy":
+            if size >= 0:
+                # add/flip to long
+                new_size = size + qty
+                avg = (avg*size + px*qty) / new_size if new_size != 0 else Decimal("0")
+                size = new_size
+            else:
+                # reduce short
+                reduce = min(qty, -size)
+                realised += (avg - px) * reduce
+                size += reduce
+                rem = qty - reduce
+                if rem > 0:
+                    avg = px
+                    size = rem
+        else:  # Sell
+            if size <= 0:
+                new_size = size - qty
+                avg = (avg*abs(size) + px*qty) / abs(new_size) if new_size != 0 else Decimal("0")
+                size = new_size
+            else:
+                reduce = min(qty, size)
+                realised += (px - avg) * reduce
+                size -= reduce
+                rem = qty - reduce
+                if rem > 0:
+                    avg = px
+                    size = -rem
+
+    return float(realised - fees), float(fees)
+
+def today_utc_bounds():
+    now = pd.Timestamp.utcnow()
+    start = now.normalize()             # 00:00 UTC today
+    end   = start + pd.Timedelta(days=1)
+    return int(start.timestamp()*1000), int(end.timestamp()*1000)
+
+def last_24h_bounds():
+    end = pd.Timestamp.utcnow()
+    start = end - pd.Timedelta(hours=24)
+    return int(start.timestamp()*1000), int(end.timestamp()*1000)
+
 
 def _authorized(update):
     chat_ok = (ALLOWED_CHAT_ID == 0) or (update.effective_chat and update.effective_chat.id == ALLOWED_CHAT_ID)
@@ -26,7 +140,7 @@ def ping_cmd(update, context):
     logging.info("[%s] Ping command received", update.effective_user.id)
     return update.effective_message.reply_text("pong ✅")
 
-def summary_cmd(router, update, context):
+def summary_cmd(router: RiskRouter, update, context):
     if not _authorized(update):
         logging.warning("[%s] Summary command denied", update.effective_user.id)
         return update.effective_message.reply_text("Sorry, not allowed here.")
@@ -57,15 +171,53 @@ def fees_cmd(router, update, context):
     logging.info("[%s] Recent fees requested: %s", update.effective_user.id, minutes)
     return update.effective_message.reply_text(txt)
 
-def trades_cmd(router, update, context):
+def trades_cmd(router: RiskRouter, update, context):
     if not _authorized(update):
         return update.effective_message.reply_text("Sorry, not allowed.")
-    arg = context.args[0] if context.args else "10"
-    txt = router.format_past_trades(n=int(arg)) if arg.isdigit() else router.format_past_trades(day=arg)
-    logging.info("[%s] Past trades requested: %s", update.effective_user.id, arg)
-    return update.effective_message.reply_text(txt or "No trades to show.")
 
-def run_command_bot(router):
+    s24, e24 = last_24h_bounds()
+    sDay, eDay = today_utc_bounds()
+
+    # run three async fetches on the engine loop, concurrently
+    loop = router.loop
+    fut_fills = asyncio.run_coroutine_threadsafe(fetch_executions(router.http, s24, e24), loop)
+    fut_pnl   = asyncio.run_coroutine_threadsafe(fetch_closed_pnl(router.http, sDay, eDay), loop)
+    fut_pos   = asyncio.run_coroutine_threadsafe(fetch_positions_snapshot(router.http), loop)
+
+    try:
+        fills     = fut_fills.result(timeout=12)
+        pnl_rows  = fut_pnl.result(timeout=12)
+        positions = fut_pos.result(timeout=12)
+    except Exception as e:
+        logging.warning("trades_cmd failed: %s", e)
+        fills, pnl_rows, positions = [], [], []
+
+    # realised PnL (Bybit closed-PnL list is authoritative)
+    day_realised = sum((r.get("closedPnl") or 0.0) - (r.get("fees") or 0.0) for r in pnl_rows)
+    # cross-check via fills (24h)
+    r_from_fills, fees_from_fills = realised_pnl_from_fills(fills)
+
+    def fmt_pos(p):
+        return f"{p['symbol']} {p['side']} {p['size']} @ {p['avgPx']:.4f}  uPnL={p['uPnl']:.2f}"
+
+    lines = []
+    lines.append(f"📊 *Trades (last 24h)*: {len(fills)} fills")
+    lines.append(f"• Realised (closed today): `{day_realised:.2f}` USDT")
+    lines.append(f"• Cross-check (fills 24h): `{r_from_fills:.2f}` USDT (fees {fees_from_fills:.2f})")
+
+    if positions:
+        lines.append("")
+        lines.append("🟡 *Open Positions*")
+        for p in positions:
+            lines.append(f"• {fmt_pos(p)}")
+    else:
+        lines.append("")
+        lines.append("🟢 No open positions.")
+
+    logging.info("[%s] Past trades requested", update.effective_user.id)
+    return update.effective_message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+def run_command_bot(router: RiskRouter):
     """Start PTB13 polling;(we're inside your engine)."""
         # no updater.idle() here
     updater = Updater(os.environ["TELE_TOKEN"], use_context=True)

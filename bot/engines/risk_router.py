@@ -128,7 +128,7 @@ class RiskRouter:
 
         self.pending: dict[str, Position] = {}
         self._pending_ts: dict[str, float] = {}
-        self.PENDING_TTL_SEC = int(getattr(config, "PENDING_TTL_SEC", 60))
+        self.PENDING_TTL_SEC = int(getattr(config, "PENDING_TTL_SEC", 20))
         asyncio.create_task(self._gc_pending())
         # daily stats
         self._daily = defaultdict(
@@ -919,24 +919,64 @@ class RiskRouter:
         while True:
             now = time.time()
             for key, ts in list(self._pending_ts.items()):
-                if now - ts > self.PENDING_TTL_SEC:
-                    pos = self.pending.pop(key, None)
+                if now - ts <= self.PENDING_TTL_SEC:
+                    continue
+
+                pos = self.pending.get(key)
+                if not pos:
                     self._pending_ts.pop(key, None)
-                    if pos:
-                        try:
-                            await asyncio.to_thread(
-                                self.http.cancel_order,
-                                category="linear",
-                                symbol=pos.signal.symbol,
-                                orderId=pos.order_id,
+                    continue
+
+                symbol = pos.signal.symbol
+
+                # 1) check live position first (did we actually fill?)
+                open_size = 0.0
+                avg_px = 0.0
+                try:
+                    resp = await asyncio.to_thread(
+                        self.http.get_positions, category="linear", symbol=symbol
+                    )
+                    items = resp.get("result", {}).get("list", []) or []
+                    for it in items:
+                        if it.get("symbol") == symbol:
+                            open_size = self._safe_float(it.get("size", 0) or 0)
+                            avg_px = self._safe_float(
+                                it.get("avgPrice") or it.get("entryPrice") or 0
                             )
-                            logging.info(
-                                "[%s] pending expired → canceled %s",
-                                pos.signal.symbol,
-                                pos.order_id,
-                            )
-                        except Exception as e:
-                            logging.warning("cancel pending failed: %s", e)
+                            break
+                except Exception as e:
+                    logging.warning("position check before cancel failed: %s", e)
+
+                if abs(open_size) > 0:
+                    # Treat as filled → promote to book and reseed brackets
+                    self.book[key] = self.pending.pop(key)
+                    self._pending_ts.pop(key, None)
+                    self._entry_price[symbol] = self._entry_price.get(symbol, 0.0) or avg_px
+                    self._side[symbol] = pos.signal.side
+                    self._reset_accumulators(symbol)
+                    await self._reseed_bracket_after_fill(symbol)
+                    logging.info("[%s] pending→book via GC (size=%s).", symbol, open_size)
+                    continue
+
+                # 2) still no position — try to cancel
+                try:
+                    await asyncio.to_thread(
+                        self.http.cancel_order,
+                        category="linear",
+                        symbol=symbol,
+                        orderId=pos.order_id,
+                    )
+                    logging.info("[%s] pending expired → canceled %s", symbol, pos.order_id)
+                except Exception as e:
+                    # 110001 = already filled/canceled → treat as benign
+                    if "110001" in str(e):
+                        logging.info("[%s] pending cancel benign (110001).", symbol)
+                    else:
+                        logging.warning("[%s] cancel pending failed: %s", symbol, e)
+                finally:
+                    self.pending.pop(key, None)
+                    self._pending_ts.pop(key, None)
+
             await asyncio.sleep(5)
 
     # helpers
