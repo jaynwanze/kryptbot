@@ -11,8 +11,7 @@ ALLOWED_CHAT_ID = int(os.getenv("TG_CHAT_ID", "0"))  # your channel id
 ALLOWED_USER_IDS = {
     int(x) for x in os.getenv("TG_ALLOW_USER_IDS", "").split(",") if x.strip().isdigit()
 }
-
-
+REST = None  # will be set in run_command_bot
 async def fetch_executions(http, since_ms: int, until_ms: int):
     params = {
         "category": "linear",
@@ -225,7 +224,7 @@ def fees_cmd(router, update, context):
     logging.info("[%s] Recent fees requested: %s", update.effective_user.id, minutes)
     return update.effective_message.reply_text(txt)
 
-def trades_cmd(router, update, rest):
+def trades_cmd(router, update, context):
     if not _authorized(update):
         return update.effective_message.reply_text("Sorry, not allowed.")
 
@@ -233,9 +232,9 @@ def trades_cmd(router, update, rest):
         s24, e24  = last_24h_bounds()
         sDay, eDay = today_utc_bounds()
 
-        fills     = _run(router, fetch_executions(rest, s24, e24)) or []
-        pnl_rows  = _run(router, fetch_closed_pnl(rest, sDay, eDay)) or []
-        positions = _run(router, fetch_positions_snapshot(rest)) or []
+        fills     = _run(router, fetch_executions(REST, s24, e24)) or []
+        pnl_rows  = _run(router, fetch_closed_pnl(REST, sDay, eDay)) or []
+        positions = _run(router, fetch_positions_snapshot(REST)) or []
 
         day_realised = sum((r.get("closedPnl", 0.0) - r.get("fees", 0.0)) for r in pnl_rows)
         r_from_fills, fees_from_fills = realised_pnl_from_fills(fills)
@@ -265,6 +264,8 @@ def trades_cmd(router, update, rest):
 def run_command_bot(router, rest:ccxt.bybit):
     """Start PTB13 polling;(we're inside your engine)."""
     # no updater.idle() here
+    global REST
+    REST = rest  # set global rest context for commands file
     updater = Updater(os.environ["TELE_TOKEN"], use_context=True)
     dp = updater.dispatcher
 
@@ -272,7 +273,7 @@ def run_command_bot(router, rest:ccxt.bybit):
     dp.add_handler(CommandHandler("summary", partial(summary_cmd, router)))
     dp.add_handler(CommandHandler("open", partial(open_cmd, router)))
     dp.add_handler(CommandHandler("fees", partial(fees_cmd, router)))
-    dp.add_handler(CommandHandler("trades", partial(trades_cmd, router,rest)))
+    dp.add_handler(CommandHandler("trades", partial(trades_cmd, router)))
 
     # IMPORTANT: include channel_post so commands in your channel are seen
     updater.start_polling(
