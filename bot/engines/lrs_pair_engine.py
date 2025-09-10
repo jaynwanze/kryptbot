@@ -52,7 +52,12 @@ GOOD_HOURS = hours("eu", session_windows=config.SESSION_WINDOWS) | hours(
 # ────────────────────────────────────────────────────────────────
 WS_URL = "wss://stream.bybit.com/v5/public/linear"
 PING_SEC = 20
-REST = ccxt.bybit({"enableRateLimit": True})
+REST = ccxt.bybit({
+    "enableRateLimit": True,
+    "apiKey": os.getenv("BYBIT_API_KEY"),
+    "secret": os.getenv("BYBIT_API_SECRET"),
+    "options": {"defaultType": "swap"}
+})
 TF = config.INTERVAL  # "15"
 TF_SEC = int(TF) * 60
 LOOKBACK = 1_000
@@ -71,6 +76,8 @@ async def _refresh_meta(router, pairs, every_min=60):
     while True:
         await audit_and_override_ticks(router, pairs)
         await asyncio.sleep(every_min * 60)
+
+
 # ────────────────────────────────────────────────────────────────
 #  Web-socket coroutine per pair
 # ────────────────────────────────────────────────────────────────
@@ -226,7 +233,7 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                         continue
 
                     # 3) Session  gate before sending a signal
-                    if not in_good_hours(bar.name,good_hours= GOOD_HOURS):
+                    if not in_good_hours(bar.name, good_hours=GOOD_HOURS):
                         h1 = update_h1(h1, bar.name, float(bar.c))
                         htf_levels = update_htf_levels_new(htf_levels, bar)
                         drop_stats["off_session"] += 1
@@ -543,15 +550,14 @@ async def consume(router: RiskRouter):
         fresh.sort(key=score, reverse=True)
 
         # ── 5) Take a snapshot of portfolio state, then
-        #        use *ephemeral counters* to reserve capacity within this batch.
-        open_used = router.open_count()
-        buy_used = router.open_count_side("Buy")
-        sell_used = router.open_count_side("Sell")
-        risk_used = router.open_risk_pct()
+        open_used = router.open_count() + router.pending_count()
+        buy_used = router.open_count_side("Buy") + router.pending_count_side("Buy")
+        sell_used = router.open_count_side("Sell") + router.pending_count_side("Sell")
+        risk_used = router.open_risk_pct() + router.pending_risk_pct()
 
         busy_clusters = {
             config.CLUSTER.get(p.signal.symbol)
-            for p in router.book.values()
+            for p in list(router.book.values()) + list(router.pending.values())
             if config.CLUSTER.get(p.signal.symbol)
         }
 
@@ -621,6 +627,7 @@ async def consume(router: RiskRouter):
                     busy_clusters.discard(cid)
                 continue
 
+
 async def main():
     router = RiskRouter(equity_usd=20, testnet=False)  # use your real equity
     pairs = getattr(config, "PAIRS_LRS", None) or config.PAIRS_LRS
@@ -630,8 +637,9 @@ async def main():
     # START the consumer and WAIT on everything
     streams.append(asyncio.create_task(consume(router)))
     streams.append(asyncio.create_task(_refresh_meta(router, pairs)))
-    run_command_bot(router)  # returns immediately; polling runs in PTB's own thread
+    run_command_bot(router, REST)  # returns immediately; polling runs in PTB's own thread
     await asyncio.gather(*streams)
+
 
 if __name__ == "__main__":
     logging.basicConfig(

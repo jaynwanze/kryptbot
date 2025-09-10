@@ -15,11 +15,13 @@ from pathlib import Path, PurePath
 import csv
 
 
-#Config & logging
-TRAIL_ENABLE          = getattr(config, "TRAIL_ENABLE", True)
-BE_ARM_R              = getattr(config, "BE_ARM_R", 0.8)     # move stop to BE after +0.8R
-ATR_TRAIL_K           = getattr(config, "ATR_TRAIL_K", 0.9)  # trail distance = k * ATR
-REMOVE_TP_WHEN_TRAIL  = getattr(config, "REMOVE_TP_WHEN_TRAIL", False)  # keep your 1.5R TP by default
+# Config & logging
+TRAIL_ENABLE = getattr(config, "TRAIL_ENABLE", True)
+BE_ARM_R = getattr(config, "BE_ARM_R", 0.8)  # move stop to BE after +0.8R
+ATR_TRAIL_K = getattr(config, "ATR_TRAIL_K", 0.9)  # trail distance = k * ATR
+REMOVE_TP_WHEN_TRAIL = getattr(
+    config, "REMOVE_TP_WHEN_TRAIL", False
+)  # keep your 1.5R TP by default
 
 LOG_DIR = Path(getattr(config, "LOG_DIR", "./logs"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -166,6 +168,10 @@ class RiskRouter:
         return int(getattr(config, "MAX_OPEN_CONCURRENT", 5))
 
     @property
+    def max_per_side_open(self) -> int:
+        return int(getattr(config, "MAX_PER_SIDE_OPEN", 1))
+
+    @property
     def max_total_risk_pct(self) -> float:
         return float(getattr(config, "MAX_TOTAL_RISK_PCT", 0.30))
 
@@ -209,6 +215,20 @@ class RiskRouter:
             if sig.key in self.book:
                 logging.info("%s already active – ignoring dup", sig.key)
                 return
+
+        # ---  portfolio caps ---
+        side = sig.side.lower()
+        if side == "buy":
+            if (
+                self.open_count_side("Buy") + self.pending_count_side("Buy")
+            ) >= self.max_per_side_open:
+                logging.info("[PORTFOLIO] Long-side full — skip %s", sig.symbol)
+                return
+        else:
+            if (
+                self.open_count_side("Sell") + self.pending_count_side("Sell")
+            ) >= self.max_per_side_open:
+                logging.info("[PORTFOLIO] Short-side full — skip %s", sig.symbol)
 
         # ---  check for existing positions
         if any(p.signal.symbol == sig.symbol for p in self.book.values()) or any(
@@ -288,11 +308,10 @@ class RiskRouter:
         self._oid_to_key[oid] = sig.key
         # pos meta for tracking trailing/BE
         pos.meta = {
-            "stop_off": float(sig.off_sl),   # you already compute this
+            "stop_off": float(sig.off_sl),  # you already compute this
             "be_armed": False,
             "trail_on": False,
         }
-
 
         logging.info(
             "[%s] order placed id=%s qty=%.6f | router: open=%d risk=%.1f%% (counting fills only)",
@@ -302,6 +321,7 @@ class RiskRouter:
             self.open_count(),
             self.open_risk_pct() * 100.0,
         )
+
     async def amend_stop(self, symbol: str, new_sl: float) -> None:
         """Tighten SL only. Keeps current TP unchanged."""
         sl_str = self._fmt_px(symbol, new_sl)
@@ -648,18 +668,18 @@ class RiskRouter:
                 new_sl = self._fmt_px(symbol, entry + off_sl)
                 new_tp = self._fmt_px(symbol, entry - off_tp)
 
-                #To test
-# # Place 50% take at 1R (reduce-only limit), then move SL to BE when hit.
-#             half = max(0.0, float(getattr(pos, "qty", 0.0)) * 0.5)
-#             if half > 0:
-#                 tp1 = new_tp if getattr(s, "rr_first", 1.0) >= 1.0 else self._fmt_px(symbol, entry + (off_tp if s.side=="Buy" else -off_tp))
-#                 await asyncio.to_thread(
-#                     self.http.place_order,
-#                     category="linear", symbol=symbol,
-#                     side="Sell" if s.side=="Buy" else "Buy",
-#                     orderType="Limit", qty=quantize_step(half, self._qty_step[symbol]),
-#                     price=tp1, reduceOnly=True, timeInForce="PostOnly"
-#                 )
+                # To test
+            # # Place 50% take at 1R (reduce-only limit), then move SL to BE when hit.
+            #             half = max(0.0, float(getattr(pos, "qty", 0.0)) * 0.5)
+            #             if half > 0:
+            #                 tp1 = new_tp if getattr(s, "rr_first", 1.0) >= 1.0 else self._fmt_px(symbol, entry + (off_tp if s.side=="Buy" else -off_tp))
+            #                 await asyncio.to_thread(
+            #                     self.http.place_order,
+            #                     category="linear", symbol=symbol,
+            #                     side="Sell" if s.side=="Buy" else "Buy",
+            #                     orderType="Limit", qty=quantize_step(half, self._qty_step[symbol]),
+            #                     price=tp1, reduceOnly=True, timeInForce="PostOnly"
+            #                 )
 
             await asyncio.to_thread(
                 self.http.set_trading_stop,
@@ -781,6 +801,27 @@ class RiskRouter:
                             self.last_sl_ts[symbol] = time.time()
                         self._log_round_trip(symbol, tp_sl_type or "execution")
                         self._clear_symbol(symbol, reason="execution reduceOnly")
+                    else:
+                        # ENTRY execution: promote pending → book if still pending
+                        oid = row.get("orderId", "")
+                        key = self._oid_to_key.get(oid) or next(
+                            (
+                                k
+                                for k, p in self.pending.items()
+                                if p.signal.symbol == symbol
+                            ),
+                            None,
+                        )
+                        if key and key in self.pending:
+                            self.book[key] = self.pending.pop(key)
+                            self._pending_ts.pop(key, None)
+                        # keep a reasonable entry price snapshot
+                        px = self._safe_float(
+                            row.get("execPrice") or row.get("avgPrice"), 0.0
+                        )
+                        if px:
+                            self._entry_price[symbol] = px
+                        self._side[symbol] = row.get("side", self._side.get(symbol, ""))
                 except Exception:
                     pass
 
@@ -789,7 +830,9 @@ class RiskRouter:
         while True:
             try:
                 resp = await asyncio.to_thread(
-                    self.http.get_positions, category="linear"
+                    self.http.get_positions,
+                    category="linear",
+                    settleCoin="USDT",  # <-- add this
                 )
                 open_syms = {
                     p["symbol"]
@@ -951,11 +994,15 @@ class RiskRouter:
                     # Treat as filled → promote to book and reseed brackets
                     self.book[key] = self.pending.pop(key)
                     self._pending_ts.pop(key, None)
-                    self._entry_price[symbol] = self._entry_price.get(symbol, 0.0) or avg_px
+                    self._entry_price[symbol] = (
+                        self._entry_price.get(symbol, 0.0) or avg_px
+                    )
                     self._side[symbol] = pos.signal.side
                     self._reset_accumulators(symbol)
                     await self._reseed_bracket_after_fill(symbol)
-                    logging.info("[%s] pending→book via GC (size=%s).", symbol, open_size)
+                    logging.info(
+                        "[%s] pending→book via GC (size=%s).", symbol, open_size
+                    )
                     continue
 
                 # 2) still no position — try to cancel
@@ -966,7 +1013,9 @@ class RiskRouter:
                         symbol=symbol,
                         orderId=pos.order_id,
                     )
-                    logging.info("[%s] pending expired → canceled %s", symbol, pos.order_id)
+                    logging.info(
+                        "[%s] pending expired → canceled %s", symbol, pos.order_id
+                    )
                 except Exception as e:
                     # 110001 = already filled/canceled → treat as benign
                     if "110001" in str(e):
@@ -980,6 +1029,25 @@ class RiskRouter:
             await asyncio.sleep(5)
 
     # helpers
+    # in RiskRouter
+    def pending_count(self) -> int:
+        return len(self.pending)
+
+    def pending_count_side(self, side: str) -> int:
+        s = side.lower()
+        return sum(1 for p in self.pending.values() if p.signal.side.lower() == s)
+
+    def pending_risk_pct(self) -> float:
+        if self.equity <= 0:
+            return 1.0
+        risk = 0.0
+        for p in self.pending.values():
+            s = p.signal
+            risk += abs(float(s.entry) - float(s.sl)) * float(
+                getattr(p, "qty", 0.0) or 0.0
+            )
+        return risk / self.equity
+
     def risk_usd_per_trade(self) -> float:
         return self.equity * float(getattr(config, "RISK_PCT", 0.1))
 
@@ -1158,8 +1226,10 @@ class RiskRouter:
         if not getattr(config, "TRAIL_ENABLE", True):
             return
         # find open position for this symbol
-        pos = next((p for p in self.book.values()
-                    if p.signal.symbol == symbol and p.is_open), None)
+        pos = next(
+            (p for p in self.book.values() if p.signal.symbol == symbol and p.is_open),
+            None,
+        )
         if not pos:
             return
 
@@ -1170,13 +1240,17 @@ class RiskRouter:
             return
 
         stop_off = float(pos.meta.get("stop_off", 0.0))
-        r_gain = ((float(bar.c) - entry) if side == "buy" else (entry - float(bar.c))) / stop_off
+        r_gain = (
+            (float(bar.c) - entry) if side == "buy" else (entry - float(bar.c))
+        ) / stop_off
         tick = self._tick_size[symbol]  # <-- bug fix
 
         # 1) move to BE once in profit by BE_ARM_R
         if not pos.meta.get("be_armed", False) and r_gain >= BE_ARM_R:
             be = entry  # (optionally add a tick to cover fees)
-            await self.amend_stop(symbol, be)   # your router already has amend/cancel helpers
+            await self.amend_stop(
+                symbol, be
+            )  # your router already has amend/cancel helpers
             pos.meta["be_armed"] = True
             pos.meta["trail_on"] = True
             if REMOVE_TP_WHEN_TRAIL:
@@ -1194,4 +1268,3 @@ class RiskRouter:
 
             if tighten:
                 await self.amend_stop(symbol, new_sl)
-
