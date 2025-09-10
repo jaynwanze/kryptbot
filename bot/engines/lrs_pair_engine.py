@@ -80,8 +80,8 @@ MIN_GAP_DAYS_PER_PAIR = 14  # hard cool-down after ANY trade
 # Stricter market-quality veto to reduce frequency
 def veto_thresholds(bar):
     vol_norm = bar.atr / bar.atr30
-    min_adx = 16 + 6 * vol_norm  # was 12 + 6*…
-    atr_veto = 0.50 + 0.25 * vol_norm  # was 0.45 + 0.25*…
+    min_adx = 14 + 5 * vol_norm  
+    atr_veto = 0.45 + 0.20 * vol_norm  
     return min_adx, atr_veto
 
 
@@ -96,7 +96,7 @@ def veto_thresholds(bar):
 
 
 # helpers
-def near_htf_level(bar, htf_row, max_atr=0.5):
+def near_htf_level(bar, htf_row, max_atr=0.8):
     cols = ["D_H","D_L","H4_H","H4_L","asia_H","asia_L","eu_H","eu_L","ny_H","ny_L"]
     levels = [htf_row.get(c) for c in cols if c in htf_row.index and pd.notna(htf_row.get(c))]
     if not levels:
@@ -261,7 +261,7 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                         continue
 
                     # 2) Proximity to HTF levels gate (now htf_row is defined)
-                    if not near_htf_level(bar, htf_row, max_atr=0.5):
+                    if not near_htf_level(bar, htf_row, max_atr=0.8):
                         h1 = update_h1(h1, bar.name, float(bar.c))
                         htf_levels = update_htf_levels_new(htf_levels, bar)
                         drop_stats["not_near_htf"] += 1
@@ -330,7 +330,7 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                     min_checks = 2 if bar.adx >= 25 else 3
                     # Longs: need tjr_long AND H1 slope up AND stoch low
                     if (
-                        bar.k_fast <= 35
+                        bar.k_fast <= 40
                         and h1row.slope > 0
                         and tjr_long_signal(hist, i, htf_row, min_checks)
                     ):
@@ -397,7 +397,7 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
 
                     # Shorts: need tjr_short AND H1 slope down AND stoch high
                     elif (
-                        bar.k_fast >= 65
+                        bar.k_fast >= 60
                         and h1row.slope < 0
                         and tjr_short_signal(hist, i, htf_row, min_checks)
                     ):
