@@ -138,7 +138,7 @@ def ping_cmd(update, context):
     logging.info("[%s] Ping command received", update.effective_user.id)
     return update.effective_message.reply_text("pong ✅")
 
-def summary_cmd(router: RiskRouter, update, context):
+def summary_cmd(router, update, context):
     if not _authorized(update):
         logging.warning("[%s] Summary command denied", update.effective_user.id)
         return update.effective_message.reply_text("Sorry, not allowed here.")
@@ -169,7 +169,7 @@ def fees_cmd(router, update, context):
     logging.info("[%s] Recent fees requested: %s", update.effective_user.id, minutes)
     return update.effective_message.reply_text(txt)
 
-def trades_cmd(router: RiskRouter, update, context):
+def trades_cmd(router, update, context):
     if not _authorized(update):
         return update.effective_message.reply_text("Sorry, not allowed.")
 
