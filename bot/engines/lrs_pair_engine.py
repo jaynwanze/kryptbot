@@ -637,7 +637,7 @@ async def main():
     # START the consumer and WAIT on everything
     streams.append(asyncio.create_task(consume(router)))
     streams.append(asyncio.create_task(_refresh_meta(router, pairs)))
-    run_command_bot(router, REST)  # returns immediately; polling runs in PTB's own thread
+    run_command_bot(router)  # returns immediately; polling runs in PTB's own thread
     await asyncio.gather(*streams)
 
 
