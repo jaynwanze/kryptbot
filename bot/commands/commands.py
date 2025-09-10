@@ -4,8 +4,6 @@ from telegram.ext import Updater, CommandHandler
 import logging
 from decimal import Decimal
 import pandas as pd
-from bot.engines.lrs_pair_engine import REST
-from bot.engines.risk_router import RiskRouter
 
 ALLOWED_CHAT_ID = int(os.getenv("TG_CHAT_ID", "0"))  # your channel id
 ALLOWED_USER_IDS = {int(x) for x in os.getenv("TG_ALLOW_USER_IDS", "").split(",") if x.strip().isdigit()}
@@ -217,7 +215,7 @@ def trades_cmd(router: RiskRouter, update, context):
     logging.info("[%s] Past trades requested", update.effective_user.id)
     return update.effective_message.reply_text("\n".join(lines), parse_mode="Markdown")
 
-def run_command_bot(router: RiskRouter):
+def run_command_bot(router):
     """Start PTB13 polling;(we're inside your engine)."""
         # no updater.idle() here
     updater = Updater(os.environ["TELE_TOKEN"], use_context=True)
