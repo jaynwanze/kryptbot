@@ -39,7 +39,6 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 COOLDOWN_DAYS_AFTER_SL = 1
 COOLDOWN_SEC = COOLDOWN_DAYS_AFTER_SL * 86400
 
-
 def _append_csv(name, row, fields):
     p = LOG_DIR / name
     new = not p.exists()
@@ -72,28 +71,13 @@ MAX_RETRY = 3
 # Signal queue
 SIGNAL_Q: Queue = Queue(maxsize=100)
 
-# Frequency throttles (tune these to hit ~1–2 trades/month/pair)
-MIN_GAP_DAYS_PER_PAIR = 14  # hard cool-down after ANY trade
-# short only when %K_fast ≥ 75
-
-
+# Frequency helpers/throttles (tune these to hit ~1–2 trades/month/pair)
 # Stricter market-quality veto to reduce frequency
 def veto_thresholds(bar):
     vol_norm = bar.atr / bar.atr30
     min_adx = 14 + 5 * vol_norm  
     atr_veto = 0.45 + 0.20 * vol_norm  
     return min_adx, atr_veto
-
-
-## prev
-# def veto_thresholds(bar):
-#     vol_norm = bar.atr / bar.atr30
-#     # If trade freq still to low change from 12 to 10
-#     min_adx = 12 + 6 * vol_norm
-#     # If trade freq still to low change from .45 to .40
-#     atr_veto = 0.45 + 0.25 * vol_norm
-#     return min_adx, atr_veto
-
 
 # helpers
 def near_htf_level(bar, htf_row, max_atr=0.8):
@@ -116,6 +100,11 @@ def in_good_hours(ts):
 # Track last signal time per pair (for cool-down)
 last_signal_ts: dict[str, float] = {}
 
+# async methods
+async def refresh_meta(router, pairs, every_min=60):
+    while True:
+        await audit_and_override_ticks(router, pairs)
+        await asyncio.sleep(every_min*60)
 # ────────────────────────────────────────────────────────────────
 #  Web-socket coroutine per pair
 # ────────────────────────────────────────────────────────────────
@@ -634,6 +623,7 @@ async def main():
     streams = [asyncio.create_task(kline_stream(p, router)) for p in pairs]
     # START the consumer and WAIT on everything
     streams.append(asyncio.create_task(consume(router)))
+    streams.append(asyncio.create_task(refresh_meta(router, pairs)))
     run_command_bot(router)  # returns immediately; polling runs in PTB's own thread
     await asyncio.gather(*streams)
 
