@@ -226,7 +226,7 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                         continue
 
                     # 2) Proximity to HTF levels gate (now htf_row is defined)
-                    if not near_htf_level(bar, htf_row, max_atr=0.8):
+                    if not near_htf_level(bar, htf_row, max_atr=1.0):
                         h1 = update_h1(h1, bar.name, float(bar.c))
                         htf_levels = update_htf_levels_new(htf_levels, bar)
                         drop_stats["not_near_htf"] += 1
@@ -300,10 +300,10 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                     header = "LRS MULTI-PAIR Engine (low-freq)"
 
                     # Check if we have enough confirmations
-                    min_checks = 2 if bar.adx >= 25 else 3
+                    min_checks = 2
                     # Longs: need tjr_long AND H1 slope up AND stoch low
                     if (
-                        bar.k_fast <= 40
+                        bar.k_fast <= 45
                         and h1row.slope > 0
                         and tjr_long_signal(hist, i, htf_row, min_checks)
                     ):
@@ -382,7 +382,7 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
 
                     # Shorts: need tjr_short AND H1 slope down AND stoch high
                     elif (
-                        bar.k_fast >= 60
+                        bar.k_fast >= 55
                         and h1row.slope < 0
                         and tjr_short_signal(hist, i, htf_row, min_checks)
                     ):
