@@ -30,10 +30,16 @@ def fees_usd(entry: float, exit_: float, qty: float, fee_bps: float) -> float:
 
 # Frequency helpers/throttles (tune these to hit ~1–2 trades/month/pair)
 # Stricter market-quality veto to reduce frequency
-def veto_thresholds(bar):
+def veto_thresholds(bar, d_atr=None):
     vol_norm = bar.atr / bar.atr30
-    min_adx = 14 + 5 * vol_norm  
-    atr_veto = 0.45 + 0.20 * vol_norm  
+    min_adx = 13 + 5 * vol_norm
+    atr_veto = 0.45 + 0.20 * vol_norm
+   # Relax *only* when hugging a level (<= 0.5 ATR away)
+    if d_atr is not None and d_atr <= 0.5:
+        min_adx -= 2.0
+        atr_veto -= 0.05
+    min_adx = max(10.0, float(min_adx))
+    atr_veto = max(0.35, float(atr_veto))
     return min_adx, atr_veto
 
 def near_htf_level(bar, htf_row, max_atr=0.8):
@@ -43,6 +49,14 @@ def near_htf_level(bar, htf_row, max_atr=0.8):
         return False
     dist = min(abs(float(bar.c) - float(L)) for L in levels)
     return dist <= max_atr * float(bar.atr)
+
+def nearest_level_datr(bar, htf_row):
+    cols = ["D_H","D_L","H4_H","H4_L","asia_H","asia_L","eu_H","eu_L","ny_H","ny_L"]
+    levels = [htf_row.get(c) for c in cols if c in htf_row.index and pd.notna(htf_row.get(c))]
+    if not levels or float(bar.atr) <= 0:
+        return None
+    dist = min(abs(float(bar.c) - float(L)) for L in levels)
+    return float(dist) / float(bar.atr)
 
 def has_open_in_cluster(router, symbol, clusters):
     cid = clusters.get(symbol)

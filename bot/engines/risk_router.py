@@ -40,6 +40,7 @@ def _append_csv(name: str, row: dict, fields: list[str]):
 def _now():
     return datetime.utcnow().isoformat(timespec="seconds")
 
+
 # in risk_router.py or a helper module
 async def audit_and_override_ticks(router, symbols):
     for sym in symbols:
@@ -745,6 +746,10 @@ class RiskRouter:
                         if key and key in self.pending:
                             self.book[key] = self.pending.pop(key)
                             self._pending_ts.pop(key, None)
+                            try:
+                                self.book[key].is_open = True
+                            except Exception:
+                                pass
                         self._entry_price[symbol] = self._safe_float(
                             row.get("avgPrice") or row.get("price"), 0.0
                         )
@@ -815,6 +820,10 @@ class RiskRouter:
                         if key and key in self.pending:
                             self.book[key] = self.pending.pop(key)
                             self._pending_ts.pop(key, None)
+                            try:
+                                self.book[key].is_open = True
+                            except Exception:
+                                pass
                         # keep a reasonable entry price snapshot
                         px = self._safe_float(
                             row.get("execPrice") or row.get("avgPrice"), 0.0
@@ -1227,14 +1236,18 @@ class RiskRouter:
             return
         # find open position for this symbol
         pos = next(
-            (p for p in self.book.values() if p.signal.symbol == symbol and p.is_open),
+            (
+                p
+                for p in self.book.values()
+                if p.signal.symbol == symbol and getattr(p, "is_open", True)
+            ),
             None,
         )
         if not pos:
             return
 
         side = pos.signal.side.lower()  # "buy" or "sell"
-        entry = float(pos.signal.entry)
+        entry = float(self._entry_price.get(symbol, float(pos.signal.entry)))
         atr = float(getattr(bar, "atr", 0.0)) or 0.0
         if atr <= 0:
             return
