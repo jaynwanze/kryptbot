@@ -488,12 +488,11 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                         elif h1row.slope < 0:
                             drop_stats["no_ltf_short"] += 1
                         logging.info(
-                            "[%s] No-trade (no gated signal)  k=%.1f  adx=%.1f  atr=%.5f  d_atr=%s  thr_adx=%.1f  thr_atr=%.2f",
+                            "[%s] No-trade (no gated signal)  k=%.1f  adx=%.1f  atr=%.5f thr_adx=%.1f  thr_atr=%.2f",
                             pair,
                             bar.k_fast,
                             bar.adx,
                             bar.atr,
-                            # f"{d_atr:.2f}" if d_atr is not None else "n/a",
                             min_adx,
                             atr_veto,
                         )
