@@ -46,8 +46,9 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 COOLDOWN_DAYS_AFTER_SL = 1
 COOLDOWN_SEC = COOLDOWN_DAYS_AFTER_SL * 86400
 GOOD_HOURS = hours("eu", session_windows=config.SESSION_WINDOWS) | hours(
-    "ny", session_windows=config.SESSION_WINDOWS
-)
+    "ny",
+    session_windows=config.SESSION_WINDOWS
+) | hours("asia", session_windows=config.SESSION_WINDOWS)
 # ────────────────────────────────────────────────────────────────
 #  Bybit + runtime constants
 # ────────────────────────────────────────────────────────────────
@@ -230,11 +231,13 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                         continue
 
                     # 2) Proximity to HTF levels gate
-                    d_atr = nearest_level_datr(bar, htf_row)
-                    near_thr = (
-                        1.1 if float(bar.adx) >= 28 else 0.9
-                    )  # wider if strong trend
-                    if d_atr is None or d_atr > near_thr:
+                    # DYNAMIC distance threshold based on ATR
+                    # d_atr = nearest_level_datr(bar, htf_row)
+                    # near_thr = (
+                    #     1.1 if float(bar.adx) >= 28 else 0.9
+                    # )  # wider if strong trend
+                    # if d_atr is None or d_atr > near_thr:
+                    if not near_htf_level(bar, htf_row, max_atr=1.0):
                         h1 = update_h1(h1, bar.name, float(bar.c))
                         htf_levels = update_htf_levels_new(htf_levels, bar)
                         drop_stats["not_near_htf"] += 1
@@ -257,7 +260,8 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                         continue
 
                     # 5) Market-quality veto (ADAPTIVE to volatility + proximity to level)
-                    min_adx, atr_veto = veto_thresholds(bar, d_atr)
+                    # min_adx, atr_veto = veto_thresholds(bar, d_atr)
+                    min_adx, atr_veto = veto_thresholds(bar)
                     if bar.adx < min_adx:
                         drop_stats["veto_adx"] += 1
                     if bar.atr < atr_veto * bar.atr30:
@@ -310,21 +314,23 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                     # Check if we have enough confirmations
                     min_checks = 2
                     # Longs: need tjr_long AND H1 slope up AND stoch low
-                    long_k = (
-                        50
-                        if ((d_atr is not None and d_atr <= 0.5) or bar.adx >= 30)
-                        else 45
-                    )
-                    slope_ok_long = (h1row.slope > 0) or (
-                        bar.k_fast <= 25 and (d_atr is not None and d_atr <= 0.5)
-                    )
-                    short_k = 50 if ((d_atr is not None and d_atr <= 0.5) or bar.adx >= 30) else 55
-                    slope_ok_short = (h1row.slope < 0) or (
-                            bar.k_fast >= 75 and (d_atr is not None and d_atr <= 0.5)
-                        )
+                    # DYNAMIC stoch threshold based on ATR + H1 slope
+                    # long_k = (
+                    #     50
+                    #     if ((d_atr is not None and d_atr <= 0.5) or bar.adx >= 30)
+                    #     else 45
+                    # )
+                    # slope_ok_long = (h1row.slope > 0) or (
+                    #     bar.k_fast <= 25 and (d_atr is not None and d_atr <= 0.5)
+                    # )
+                    # short_k = 50 if ((d_atr is not None and d_atr <= 0.5) or bar.adx >= 30) else 55
+                    # slope_ok_short = (h1row.slope < 0) or (
+                    #         bar.k_fast >= 75 and (d_atr is not None and d_atr <= 0.5)
+                    #     )
+
                     if (
-                        bar.k_fast <= long_k
-                        and slope_ok_long
+                        bar.k_fast <= 45
+                        and h1row.slope > 0
                         and tjr_long_signal(hist, i, htf_row, min_checks)
                     ):
                         if router.has_open(pair):
@@ -402,10 +408,10 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
 
                     # Shorts: need tjr_short AND H1 slope down AND stoch high
                     elif (
-                            bar.k_fast >= short_k
-                            and slope_ok_short
-                            and tjr_short_signal(hist, i, htf_row, min_checks)
-                        ):
+                        bar.k_fast >= 55
+                        and h1row.slope < 0
+                        and tjr_short_signal(hist, i, htf_row, min_checks)
+                    ):
                         if router.has_open(pair):
                             logging.info("[%s] No-trade (already open)", pair)
                         else:
@@ -487,7 +493,7 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                             bar.k_fast,
                             bar.adx,
                             bar.atr,
-                            f"{d_atr:.2f}" if d_atr is not None else "n/a",
+                            # f"{d_atr:.2f}" if d_atr is not None else "n/a",
                             min_adx,
                             atr_veto,
                         )
