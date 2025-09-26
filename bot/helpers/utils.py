@@ -32,14 +32,14 @@ def fees_usd(entry: float, exit_: float, qty: float, fee_bps: float) -> float:
 # Stricter market-quality veto to reduce frequency
 def veto_thresholds(bar, d_atr=None):
     vol_norm = bar.atr / bar.atr30
-    min_adx = 13 + 5 * vol_norm
+    min_adx = 14 + 5 * vol_norm
     atr_veto = 0.45 + 0.20 * vol_norm
    # Relax *only* when hugging a level (<= 0.5 ATR away)
-    if d_atr is not None and d_atr <= 0.5:
-        min_adx -= 2.0
-        atr_veto -= 0.05
-    min_adx = max(10.0, float(min_adx))
-    atr_veto = max(0.35, float(atr_veto))
+    # if d_atr is not None and d_atr <= 0.5:
+    #     min_adx -= 2.0
+    #     atr_veto -= 0.05
+    # min_adx = max(10.0, float(min_adx))
+    # atr_veto = max(0.35, float(atr_veto))
     return min_adx, atr_veto
 
 def near_htf_level(bar, htf_row, max_atr=0.8):
