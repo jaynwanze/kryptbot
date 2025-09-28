@@ -230,20 +230,46 @@ def trades_cmd(router, update, context):
         return update.effective_message.reply_text("Sorry, not allowed.")
 
     try:
-        s24, e24  = last_24h_bounds()
-        sDay, eDay = today_utc_bounds()
+        # Parse time period from command or args
+        period_days = 1  # default to 24h
 
-        fills     = _run(router, fetch_executions(router.http, s24, e24)) or []
-        pnl_rows  = _run(router, fetch_closed_pnl(router.http, sDay, eDay)) or []
+        # Check if command has suffix like /trades_7d
+        command_text = update.effective_message.text.split()[0]  # e.g., "/trades_7d"
+        if '_' in command_text:
+            period_str = command_text.split('_')[1]  # e.g., "7d"
+            if period_str.endswith('d') and period_str[:-1].isdigit():
+                period_days = int(period_str[:-1])
+
+        # Or check first argument like "/trades 7"
+        elif context.args and context.args[0].isdigit():
+            period_days = int(context.args[0])
+
+        # Calculate time bounds
+        end_time = pd.Timestamp.utcnow()
+        start_time = end_time - pd.Timedelta(days=period_days)
+        s_ms = int(start_time.timestamp() * 1000)
+        e_ms = int(end_time.timestamp() * 1000)
+
+        # For closed PnL, use today's bounds if period is 1 day, otherwise use full period
+        if period_days == 1:
+            sDay, eDay = today_utc_bounds()
+        else:
+            sDay, eDay = s_ms, e_ms
+
+        fills = _run(router, fetch_executions(router.http, s_ms, e_ms)) or []
+        pnl_rows = _run(router, fetch_closed_pnl(router.http, sDay, eDay)) or []
         positions = _run(router, fetch_positions_snapshot(router.http)) or []
 
         day_realised = sum((r.get("closedPnl", 0.0) - r.get("fees", 0.0)) for r in pnl_rows)
         r_from_fills, fees_from_fills = realised_pnl_from_fills(fills)
 
+        # Dynamic period label
+        period_label = f"{period_days}d" if period_days != 1 else "24h"
+
         lines = []
-        lines.append(f"📊 *Trades (last 24h)*: {len(fills)} fills")
-        lines.append(f"• Realised (closed today): `{day_realised:.2f}` USDT")
-        lines.append(f"• Cross-check (fills 24h): `{r_from_fills:.2f}` USDT (fees {fees_from_fills:.2f})")
+        lines.append(f"📊 *Trades (last {period_label})*: {len(fills)} fills")
+        lines.append(f"• Realised (closed {period_label}): `{day_realised:.2f}` USDT")
+        lines.append(f"• Cross-check (fills {period_label}): `{r_from_fills:.2f}` USDT (fees {fees_from_fills:.2f})")
 
         if positions:
             lines.append("\n🟡 *Open Positions*")
@@ -272,8 +298,17 @@ def run_command_bot(router:RiskRouter):
     dp.add_handler(CommandHandler("summary", partial(summary_cmd, router)))
     dp.add_handler(CommandHandler("open", partial(open_cmd, router)))
     dp.add_handler(CommandHandler("fees", partial(fees_cmd, router)))
-    dp.add_handler(CommandHandler("trades", partial(trades_cmd, router)))
+  # Register trades command with multiple variants
+    trades_commands = ["trades", "trades_7d", "trades_30d", "trades_60d", "trades_90d", "trades_180d", "trades_365d"]
+    dp.add_handler(CommandHandler(trades_commands, partial(trades_cmd, router)))
 
+    updater.start_polling(
+        allowed_updates=["message", "channel_post"],
+        drop_pending_updates=True,
+        timeout=20,
+        read_latency=3.0,
+    )
+    logging.info("Telegram bot started.")
     # IMPORTANT: include channel_post so commands in your channel are seen
     updater.start_polling(
         allowed_updates=["message", "channel_post"],
