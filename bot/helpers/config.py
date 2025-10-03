@@ -29,12 +29,12 @@ STO_K_MIN_LONG = 45
 STO_K_MIN_SHORT = 30
 HTF_DAYS = 15  # days of history to seek untapped highs/lows
 HTF_LEVEL_TF = "1H"  # build levels from hourly bars
-SESSION_WINDOWS = {  # UTC sessions
-    "asia": (0, 8),  # 00–08 UTC
-    "eu": (7, 15),  # 07–15 UTC
-    "ny": (12, 20),  # 12–20 UTC
-}
-
+# SESSION_WINDOWS = {  # UTC sessions
+#     "asia": (0, 8),  # 00–08 UTC
+#     "eu": (7, 15),  # 07–15 UTC
+#     "ny": (12, 20),  # 12–20 UTC
+# }
+SESSION_WINDOWS = {"all": (0, 24)}
 ###  LTF confirmation
 FVG_MIN_PX = 0.0005  # was 0.0005
 FIB_EXT = 0.79  # 79 % retrace / extension
