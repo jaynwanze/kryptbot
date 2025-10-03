@@ -36,6 +36,7 @@ from bot.helpers import (
 )
 from bot.data import preload_history
 from bot.commands import run_command_bot
+from collections import deque, defaultdict
 
 # ────────────────────────────────────────────────────────────────
 #  Global constants
@@ -45,10 +46,17 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 # --- cooldown after SL ---
 COOLDOWN_DAYS_AFTER_SL = 1
 COOLDOWN_SEC = COOLDOWN_DAYS_AFTER_SL * 86400
-GOOD_HOURS = hours("eu", session_windows=config.SESSION_WINDOWS) | hours(
-    "ny",
-    session_windows=config.SESSION_WINDOWS
-) | hours("asia", session_windows=config.SESSION_WINDOWS)
+
+# Build the set of allowed hours once
+def _union_hours(sw: dict[str, tuple[int,int]]) -> set[int]:
+    s = set()
+    for a,b in sw.values():
+        s |= set(range(a, b))   # end-exclusive
+    return s
+
+GOOD_HOURS = _union_hours(config.SESSION_WINDOWS)
+SESSION_GATING = (len(GOOD_HOURS) < 24)  # only enforce if not 24/7
+
 # ────────────────────────────────────────────────────────────────
 #  Bybit + runtime constants
 # ────────────────────────────────────────────────────────────────
@@ -72,7 +80,8 @@ MAX_RETRY = 3
 SIGNAL_Q: Queue = Queue(maxsize=100)
 # Track last signal time per pair (for cool-down)
 last_signal_ts: dict[str, float] = {}
-
+recent_exec_ts = deque(maxlen=256)             # timestamps of accepted entries
+daily_count    = defaultdict(int)              # day -> count
 
 # ────────────────────────────────────────────────────────────────
 # async methods
@@ -244,7 +253,7 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                         continue
 
                     # 3) Session  gate before sending a signal
-                    if not in_good_hours(bar.name, good_hours=GOOD_HOURS):
+                    if SESSION_GATING and not in_good_hours(bar.name, good_hours=GOOD_HOURS):
                         h1 = update_h1(h1, bar.name, float(bar.c))
                         htf_levels = update_htf_levels_new(htf_levels, bar)
                         drop_stats["off_session"] += 1
