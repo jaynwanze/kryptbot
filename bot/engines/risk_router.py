@@ -132,6 +132,7 @@ class RiskRouter:
         self.pending: dict[str, Position] = {}
         self._pending_ts: dict[str, float] = {}
         self.PENDING_TTL_SEC = int(getattr(config, "PENDING_TTL_SEC", 20))
+        self.scalp_time_stops = {}
         asyncio.create_task(self._gc_pending())
         # daily stats
         self._daily = defaultdict(
@@ -237,12 +238,7 @@ class RiskRouter:
         ):
             logging.info("[%s] Skip: already have an open/pending position", sig.symbol)
             return
-
-        # per-pair rule: only 1 open per symbol
-        if any(p.signal.symbol == sig.symbol for p in self.book.values()):
-            logging.info("[%s] Skip: already have an open position", sig.symbol)
-            return
-
+        
         # portfolio concurrency guard
         if self.open_count() >= self.max_open_concurrent:
             logging.info(
@@ -256,13 +252,11 @@ class RiskRouter:
         if sig.symbol not in self._lev_max:
             await self._warm_meta(sig.symbol)
 
-        # Get budget/step bounds from your existing helper
-        # (qty_from_plan is ignored – we recompute risk-based qty with live price)
+        # Budget bounds (qty_budget comes from wallet/leverage constraints)
         _qty_risk_plan, qty_budget, _qty_from_plan = await self._size_with_budget(sig)
 
         # -------- live price & risk distance --------
         px = await self.mark_or_last_price(sig.symbol)
-
         if sig.side == "Buy":
             risk_dist = max(1e-12, float(px) - float(sig.sl))
         else:
@@ -271,10 +265,18 @@ class RiskRouter:
         risk_usd = self.risk_usd_per_trade()
         qty_risk = risk_usd / risk_dist
 
-        # round to lot step and cap by budget
+        # base qty: risk-based, capped by budget
         qty = self.round_qty(sig.symbol, min(qty_risk, qty_budget))
 
-        # proposed risk at current price
+        # Detect scalp signals by key suffix and scale size (AFTER qty exists)
+        is_scalp = isinstance(getattr(sig, "key", ""), str) and str(sig.key).endswith(
+            "-SCALP"
+        )
+        if is_scalp:
+            size_mult = float(getattr(config, "SCALP_RISK_SCALE", 0.6))
+            qty = self.round_qty(sig.symbol, qty * size_mult)
+
+        # proposed risk at current price (reflects any scalp scaling)
         proposed_risk = risk_dist * float(qty)
 
         # portfolio risk guard
@@ -282,8 +284,7 @@ class RiskRouter:
             self.equity * self.max_total_risk_pct
         ):
             logging.info(
-                "[PORTFOLIO] Skip %s: risk cap %.0f%% exceeded "
-                "(open=%.2f, proposed=%.2f, cap=%.2f)",
+                "[PORTFOLIO] Skip %s: risk cap %.0f%% exceeded (open=%.2f, proposed=%.2f, cap=%.2f)",
                 sig.symbol,
                 self.max_total_risk_pct * 100,
                 self.open_risk_usd(),
@@ -304,16 +305,19 @@ class RiskRouter:
         # place & track
         oid = await self._place_bracket(sig, qty)
         pos = Position(sig, oid, qty)
-        self.pending[sig.key] = pos  # <— was: self.book[...]
+        self.pending[sig.key] = pos
         self._pending_ts[sig.key] = time.time()
         self._oid_to_key[oid] = sig.key
-        # pos meta for tracking trailing/BE
-        pos.meta = {
-            "stop_off": float(sig.off_sl),  # you already compute this
-            "be_armed": False,
-            "trail_on": False,
-        }
 
+        # time-stop for scalp
+        if is_scalp and int(getattr(config, "SCALP_TIME_STOP_BARS", 0)) > 0:
+            tf_sec = int(getattr(config, "INTERVAL", "15")) * 60
+            self.scalp_time_stops[sig.symbol] = time.time() + tf_sec * int(
+                getattr(config, "SCALP_TIME_STOP_BARS", 3)
+            )
+
+        # pos meta for trailing / BE
+        pos.meta = {"stop_off": float(sig.off_sl), "be_armed": False, "trail_on": False}
         logging.info(
             "[%s] order placed id=%s qty=%.6f | router: open=%d risk=%.1f%% (counting fills only)",
             sig.symbol,
@@ -461,18 +465,25 @@ class RiskRouter:
         return 0.0
 
     async def mark_or_last_price(self, symbol: str) -> float:
+        # 1) Bybit mark price
+        try:
+            resp = await asyncio.to_thread(self.http.get_tickers, category="linear", symbol=symbol)
+            lst = resp.get("result", {}).get("list", []) or []
+            mark = float(lst[0].get("markPrice", 0)) if lst else 0.0
+            if mark:
+                return mark
+        except Exception:
+            pass
+
+        # 2) CCXT fallback (if your symbols are unified there)
         try:
             t = await self.ccxt.fetch_ticker(symbol)
-            info = t.get("info", {})
-            # Bybit often exposes mark price here:
-            mark = info.get("markPrice") or info.get("mark_price")
-            if mark is not None:
-                return float(mark)
             if t.get("last"):
                 return float(t["last"])
         except Exception:
             pass
-        # Fallback to mid of book if ticker fails
+
+        # 3) Final fallback: mid of book via CCXT (if mapped)
         ob = await self.ccxt.fetch_order_book(symbol, limit=5)
         bid = ob["bids"][0][0] if ob["bids"] else None
         ask = ob["asks"][0][0] if ob["asks"] else None
@@ -669,19 +680,6 @@ class RiskRouter:
                 new_sl = self._fmt_px(symbol, entry + off_sl)
                 new_tp = self._fmt_px(symbol, entry - off_tp)
 
-                # To test
-            # # Place 50% take at 1R (reduce-only limit), then move SL to BE when hit.
-            #             half = max(0.0, float(getattr(pos, "qty", 0.0)) * 0.5)
-            #             if half > 0:
-            #                 tp1 = new_tp if getattr(s, "rr_first", 1.0) >= 1.0 else self._fmt_px(symbol, entry + (off_tp if s.side=="Buy" else -off_tp))
-            #                 await asyncio.to_thread(
-            #                     self.http.place_order,
-            #                     category="linear", symbol=symbol,
-            #                     side="Sell" if s.side=="Buy" else "Buy",
-            #                     orderType="Limit", qty=quantize_step(half, self._qty_step[symbol]),
-            #                     price=tp1, reduceOnly=True, timeInForce="PostOnly"
-            #                 )
-
             await asyncio.to_thread(
                 self.http.set_trading_stop,
                 category="linear",
@@ -692,6 +690,11 @@ class RiskRouter:
                 slTriggerBy="LastPrice",
                 positionIdx=0,
             )
+            for pos2 in self.book.values():
+                if pos2.signal.symbol == symbol:
+                    pos2.signal.sl = float(new_sl)
+                    pos2.signal.tp = float(new_tp)
+                    break
             logging.info(
                 "[%s] adjusted TP/SL after fill: entry=%.6f SL=%s TP=%s",
                 symbol,
@@ -1232,8 +1235,6 @@ class RiskRouter:
             logging.warning("summary telegram send failed: %s", e)
 
     async def maybe_trail(self, symbol: str, bar) -> None:
-        if not getattr(config, "TRAIL_ENABLE", True):
-            return
         # find open position for this symbol
         pos = next(
             (
@@ -1246,24 +1247,36 @@ class RiskRouter:
         if not pos:
             return
 
-        side = pos.signal.side.lower()  # "buy" or "sell"
+        side = pos.signal.side  # "Buy" or "Sell"
+
+        # SCALP time-stop (checked before trailing)
+        ts = self.scalp_time_stops.get(symbol)
+        if ts and time.time() >= ts:
+            await self.close_market(symbol, reason="SCALP time stop", side=side)
+            self.scalp_time_stops.pop(symbol, None)
+            return
+
+        if not getattr(config, "TRAIL_ENABLE", True):
+            return
+
         entry = float(self._entry_price.get(symbol, float(pos.signal.entry)))
         atr = float(getattr(bar, "atr", 0.0)) or 0.0
         if atr <= 0:
             return
 
         stop_off = float(pos.meta.get("stop_off", 0.0))
+        if stop_off <= 0:
+            return
+
         r_gain = (
-            (float(bar.c) - entry) if side == "buy" else (entry - float(bar.c))
+            (float(bar.c) - entry) if side.lower() == "buy" else (entry - float(bar.c))
         ) / stop_off
-        tick = self._tick_size[symbol]  # <-- bug fix
+        tick = self._tick_size.get(symbol, 0.0) or 1e-12
 
         # 1) move to BE once in profit by BE_ARM_R
         if not pos.meta.get("be_armed", False) and r_gain >= BE_ARM_R:
-            be = entry  # (optionally add a tick to cover fees)
-            await self.amend_stop(
-                symbol, be
-            )  # your router already has amend/cancel helpers
+            be = entry  # (optionally + tick to help cover fees)
+            await self.amend_stop(symbol, be)
             pos.meta["be_armed"] = True
             pos.meta["trail_on"] = True
             if REMOVE_TP_WHEN_TRAIL:
@@ -1272,7 +1285,7 @@ class RiskRouter:
 
         # 2) ATR trailing once armed
         if pos.meta.get("trail_on", False):
-            if side == "buy":
+            if side.lower() == "buy":
                 new_sl = max(float(pos.signal.sl), float(bar.c) - ATR_TRAIL_K * atr)
                 tighten = new_sl > float(pos.signal.sl) + tick
             else:
@@ -1281,3 +1294,64 @@ class RiskRouter:
 
             if tighten:
                 await self.amend_stop(symbol, new_sl)
+
+    async def close_market(self, symbol: str, reason: str = "", side: str = "") -> None:
+        """Reduce-only market close of any open position."""
+        try:
+            resp = await asyncio.to_thread(
+                self.http.get_positions, category="linear", symbol=symbol
+            )
+            items = resp.get("result", {}).get("list", []) or []
+
+            size = 0.0
+            pos_side = (side or "").capitalize()  # use provided param if any
+
+            for it in items:
+                if it.get("symbol") != symbol:
+                    continue
+                raw_size = it.get("size", it.get("positionAmt", 0) or 0)
+                size = abs(self._safe_float(raw_size))
+                if not pos_side:
+                    pos_side = (
+                        it.get("side") or ""
+                    ).capitalize()  # "Buy"/"Sell" if present
+                break
+
+            if size <= 0:
+                logging.info("[%s] close_market: no open size; nothing to do", symbol)
+                return
+
+            # Fallbacks if API didn't give side
+            if not pos_side:
+                pos_side = (self._side.get(symbol) or "").capitalize()
+            if not pos_side:
+                p = next(
+                    (p for p in self.book.values() if p.signal.symbol == symbol), None
+                )
+                if p:
+                    pos_side = p.signal.side
+
+            opp = "Sell" if (pos_side or "").lower() == "buy" else "Buy"
+
+            qty_str = quantize_step(
+                size, self._qty_step[symbol]
+            )  # floor to step (≤ size)
+            await asyncio.to_thread(
+                self.http.place_order,
+                category="linear",
+                symbol=symbol,
+                side=opp,
+                orderType="Market",
+                qty=qty_str,
+                reduceOnly=True,
+                closeOnTrigger=True,
+            )
+            logging.info(
+                "[%s] reduce-only market close sent (%s)", symbol, reason or "manual"
+            )
+            telegram.bybit_alert(
+                msg=f"[{symbol}] reduce-only market close sent ({reason})"
+            )
+
+        except Exception as e:
+            logging.warning("[%s] close_market failed: %s", symbol, e)

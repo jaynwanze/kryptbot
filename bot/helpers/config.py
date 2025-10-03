@@ -24,9 +24,23 @@ SL_CUSHION_MULT = 1.6  # was a hidden “1.6”; make it explicit & multiplicati
 WICK_BUFFER = (
     0.25  # in ATR units              # extra cushion for SL (to avoid false hits)
 )
-ADX_FLOOR = 25
-STO_K_MIN_LONG = 45
-STO_K_MIN_SHORT = 30
+# ── Momentum tuning (higher quality, still active)
+ADX_HARD_FLOOR = 28              # never trade momentum below this
+MOMENTUM_STO_K_LONG = 40         # was 45
+MOMENTUM_STO_K_SHORT = 60        # was 55
+NEAR_HTF_MAX_ATR_MOM = 0.9       # was 1.0 → be a little closer to HTF
+
+# ── MR Scalp profile (quiet-regime filler)
+SCALP_ON = True                  # quick on/off
+SCALP_ADX_MAX = 20               # only when sleepy
+SCALP_NEAR_MAX_ATR = 0.6         # must be very close to HTF level
+SCALP_K_LONG = 10                # oversold extreme
+SCALP_K_SHORT = 90               # overbought extreme
+SCALP_ATR_MULT_SL = 0.9          # tighter stop than momentum
+SCALP_TP_MULT_OF_SL = 0.7        # small TP => high hit-rate
+SCALP_RISK_SCALE = 0.60          # 60% of your normal size
+SCALP_TIME_STOP_BARS = 3         # (optional) exit if not hit in N bars
+
 HTF_DAYS = 15  # days of history to seek untapped highs/lows
 HTF_LEVEL_TF = "1H"  # build levels from hourly bars
 # SESSION_WINDOWS = {  # UTC sessions
