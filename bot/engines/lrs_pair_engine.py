@@ -284,17 +284,15 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                         min_adx, getattr(config, "ADX_HARD_FLOOR", 0)
                     )  # hard floor
 
-                    # decide early if scalp should be allowed to bypass the momentum veto
-                    allow_scalp = (
-                        getattr(config, "SCALP_ON", True)
-                        and float(bar.adx) < float(getattr(config, "SCALP_ADX_MAX", 20))
-                        and near_htf_level(bar, htf_row, max_atr=getattr(config, "SCALP_NEAR_MAX_ATR", 0.6))
-                        and abs(float(getattr(h1row, "slope", 0.0))) < 0.15
-                        and not router.has_open(pair)
-                    )
-
-
-
+                    # # decide early if scalp should be allowed to bypass the momentum veto
+                    # allow_scalp = (
+                    #     getattr(config, "SCALP_ON", True)
+                    #     and float(bar.adx) < float(getattr(config, "SCALP_ADX_MAX", 20))
+                    #     and near_htf_level(bar, htf_row, max_atr=getattr(config, "SCALP_NEAR_MAX_ATR", 0.6))
+                    #     and abs(float(getattr(h1row, "slope", 0.0))) < 0.15
+                    #     and not router.has_open(pair)
+                    # )
+                    allow_scalp = False
 
                     # Collect veto stats
                     if bar.adx < min_adx:
@@ -348,7 +346,7 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                     header = "LRS MULTI-PAIR Engine (low-freq)"
 
                     # Check if we have enough confirmations
-                    min_checks = 2 if bar.adx >= 35 else 3
+                    min_checks = 2 if bar.adx >= 25 else 3
                     # Longs: need tjr_long AND H1 slope up AND stoch low
                     # DYNAMIC stoch threshold based on ATR + H1 slope
                     # long_k = (
@@ -365,7 +363,7 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                     #     )
 
                     if (
-                        bar.k_fast <= getattr(config, "MOMENTUM_STO_K_LONG", 40)
+                        bar.k_fast <= 35
                         and h1row.slope > 0
                         and tjr_long_signal(hist, i, htf_row, min_checks)
                     ):
@@ -444,7 +442,7 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
 
                     # Shorts: need tjr_short AND H1 slope down AND stoch high
                     elif (
-                        bar.k_fast >= getattr(config, "MOMENTUM_STO_K_SHORT", 60)
+                        bar.k_fast >= 65
                         and h1row.slope < 0
                         and tjr_short_signal(hist, i, htf_row, min_checks)
                     ):
