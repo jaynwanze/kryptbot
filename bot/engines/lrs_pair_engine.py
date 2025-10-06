@@ -114,21 +114,7 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
         "no_ltf_short": 0,
         "scalp": 0,
     }
-    decision_log = {
-        "ts": bar.name,
-        "symbol": pair,
-        "htf_ok": near_htf_level(bar, htf_row, max_atr=0.9),
-        "session_ok": in_good_hours(bar.name, GOOD_HOURS),
-        "adx": bar.adx,
-        "adx_ok": bar.adx >= min_adx,
-        "atr_ratio": bar.atr / bar.atr30,
-        "atr_ok": bar.atr >= atr_veto * bar.atr30,
-        "k_fast": bar.k_fast,
-        "h1_slope": h1row.slope,
-        "tjr_long": tjr_long_signal(hist, i, htf_row, min_checks),
-        "tjr_short": tjr_short_signal(hist, i, htf_row, min_checks),
-    }
-    append_csv("decisions.csv", decision_log, list(decision_log.keys()), log_dir=LOG_DIR)
+
     htf_levels = build_htf_levels(hist.copy())
     h1 = build_h1(hist.copy())
 
