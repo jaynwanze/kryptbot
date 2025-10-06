@@ -45,6 +45,7 @@ LOG_DIR = Path(getattr(config, "LOG_DIR", "./logs"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 # --- cooldown after SL ---
 COOLDOWN_DAYS_AFTER_SL = 0.5  # was 1 → 12 hours
+COOLDOWN_DAYS_AFTER_TP = 0.25  # 6 hours
 COOLDOWN_SEC = COOLDOWN_DAYS_AFTER_SL * 86400
 
 # Build the set of allowed hours once
@@ -113,6 +114,21 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
         "no_ltf_short": 0,
         "scalp": 0,
     }
+    decision_log = {
+        "ts": bar.name,
+        "symbol": pair,
+        "htf_ok": near_htf_level(bar, htf_row, max_atr=0.9),
+        "session_ok": in_good_hours(bar.name, GOOD_HOURS),
+        "adx": bar.adx,
+        "adx_ok": bar.adx >= min_adx,
+        "atr_ratio": bar.atr / bar.atr30,
+        "atr_ok": bar.atr >= atr_veto * bar.atr30,
+        "k_fast": bar.k_fast,
+        "h1_slope": h1row.slope,
+        "tjr_long": tjr_long_signal(hist, i, htf_row, min_checks),
+        "tjr_short": tjr_short_signal(hist, i, htf_row, min_checks),
+    }
+    append_csv("decisions.csv", decision_log, list(decision_log.keys()), log_dir=LOG_DIR)
     htf_levels = build_htf_levels(hist.copy())
     h1 = build_h1(hist.copy())
 
@@ -284,28 +300,15 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                         min_adx, getattr(config, "ADX_HARD_FLOOR", 0)
                     )  # hard floor
 
-                    # # decide early if scalp should be allowed to bypass the momentum veto
-                    # allow_scalp = (
-                    #     getattr(config, "SCALP_ON", True)
-                    #     and float(bar.adx) < float(getattr(config, "SCALP_ADX_MAX", 20))
-                    #     and near_htf_level(bar, htf_row, max_atr=getattr(config, "SCALP_NEAR_MAX_ATR", 0.6))
-                    #     and abs(float(getattr(h1row, "slope", 0.0))) < 0.15
-                    #     and not router.has_open(pair)
-                    # )
-                    allow_scalp = False
-
                     # Collect veto stats
                     if bar.adx < min_adx:
                         drop_stats["veto_adx"] += 1
                     if bar.atr < atr_veto * bar.atr30:
                         drop_stats["veto_atr"] += 1
-                    # Collect scalp stats
-                    if allow_scalp:
-                        drop_stats["scalp"] += 1
 
                    # veto only if scalp is NOT allowed
                     veto = (bar.adx < min_adx or bar.atr < atr_veto * bar.atr30)
-                    if veto and not allow_scalp:
+                    if veto:
                         logging.info(
                             "[%s] No-trade (veto)  k=%.1f  adx=%.1f  atr=%.5f",
                             pair, bar.k_fast, bar.adx, bar.atr
@@ -335,9 +338,10 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                         continue
 
                     # Distances
-                    sl_base = config.ATR_MULT_SL * bar.atr
+                    cushion = 1.3 if bar.adx >= 30 else 1.5  # tighter in trends
+                    sl_base = cushion * bar.atr
                     stop_off = (
-                        config.SL_CUSHION_MULT * sl_base + config.WICK_BUFFER * bar.atr
+                        cushion * sl_base + config.WICK_BUFFER * bar.atr
                     )
                     tp_dist = config.RR_TARGET * stop_off
 
@@ -347,24 +351,27 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
 
                     # Check if we have enough confirmations
                     min_checks = 2 if bar.adx >= 25 else 3
-                    # Longs: need tjr_long AND H1 slope up AND stoch low
-                    # DYNAMIC stoch threshold based on ATR + H1 slope
-                    # long_k = (
-                    #     50
-                    #     if ((d_atr is not None and d_atr <= 0.5) or bar.adx >= 30)
-                    #     else 45
-                    # )
-                    # slope_ok_long = (h1row.slope > 0) or (
-                    #     bar.k_fast <= 25 and (d_atr is not None and d_atr <= 0.5)
-                    # )
-                    # short_k = 50 if ((d_atr is not None and d_atr <= 0.5) or bar.adx >= 30) else 55
-                    # slope_ok_short = (h1row.slope < 0) or (
-                    #         bar.k_fast >= 75 and (d_atr is not None and d_atr <= 0.5)
-                    #     )
+
+                 # 6) Look for new entries (if flat)
+                    decision_log = {
+                        "ts": bar.name.isoformat(),
+                        "symbol": pair,
+                        "htf_ok": near_htf_level(bar, htf_row, max_atr=0.7),
+                        "session_ok": in_good_hours(bar.name, GOOD_HOURS),
+                        "adx": float(bar.adx),
+                        "adx_ok": float(bar.adx) >= min_adx,
+                        "atr_ratio": float(bar.atr / bar.atr30),
+                        "atr_ok": float(bar.atr) >= atr_veto * float(bar.atr30),
+                        "k_fast": float(bar.k_fast),
+                        "h1_slope": float(h1row.slope),
+                        "min_adx": min_adx,
+                        "min_checks": min_checks,
+                    }
+                    append_csv("decisions.csv", decision_log, list(decision_log.keys()), log_dir=LOG_DIR)
 
                     if (
-                        bar.k_fast <= 35
-                        and h1row.slope > 0
+                        bar.k_fast <= getattr(config, "MOMENTUM_STO_K_LONG", 30)
+                        and h1row.slope > getattr(config, "MIN_H1_SLOPE", 0.10)
                         and tjr_long_signal(hist, i, htf_row, min_checks)
                     ):
                         if router.has_open(pair):
@@ -442,8 +449,8 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
 
                     # Shorts: need tjr_short AND H1 slope down AND stoch high
                     elif (
-                        bar.k_fast >= 65
-                        and h1row.slope < 0
+                        bar.k_fast >= getattr(config, "MOMENTUM_STO_K_SHORT", 70)
+                        and h1row.slope < getattr(config, "MIN_H1_SLOPE", 0.10)
                         and tjr_short_signal(hist, i, htf_row, min_checks)
                     ):
                         if router.has_open(pair):
@@ -531,61 +538,6 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                             atr_veto,
                         )
 
-                        # --- MR SCALP (quiet regime, high hit-rate) ---------------------
-                        try:
-                            if allow_scalp:
-                                header = "LRS MULTI-PAIR Engine (MR-SCALP)"
-
-                                if float(bar.k_fast) <= float(getattr(config, "SCALP_K_LONG", 10)):
-                                    sl = float(getattr(config, "SCALP_ATR_MULT_SL", 0.9)) * float(bar.atr)
-                                    stop_off = config.SL_CUSHION_MULT * sl + 0.15 * float(bar.atr)
-                                    tp_dist  = float(getattr(config, "SCALP_TP_MULT_OF_SL", 0.7)) * stop_off
-
-                                    telegram.alert_side(pair, bar, TF, "LONG", stop_off=stop_off, tp_dist=tp_dist, header=header)
-                                    sig = Signal(
-                                        pair, "Buy", bar.c,
-                                        sl=bar.c - stop_off, tp=bar.c + tp_dist,
-                                        key=f"{pair}-{bar.name:%Y%m%d-%H%M}-SCALP",
-                                        ts=bar.name,
-                                        adx=float(bar.adx), k_fast=float(bar.k_fast), k_slow=float(bar.k_slow), d_slow=float(bar.d_slow),
-                                        vol=float(getattr(bar, "v", 0.0)), off_sl=stop_off, off_tp=tp_dist,
-                                    )
-                                    append_csv("signals.csv", {
-                                        "ts": sig.ts.isoformat(), "symbol": sig.symbol, "side": sig.side,
-                                        "entry": float(sig.entry), "sl": float(sig.sl), "tp": float(sig.tp),
-                                        "adx": getattr(sig, "adx", 0.0), "k_fast": getattr(sig, "k_fast", 0.0),
-                                        "k_slow": getattr(sig, "k_slow", 0.0), "d_slow": getattr(sig, "d_slow", 0.0),
-                                        "off_sl": getattr(sig, "off_sl", 0.0), "off_tp": getattr(sig, "off_tp", 0.0),
-                                        "key": sig.key,
-                                    }, ["ts","symbol","side","entry","sl","tp","adx","k_fast","k_slow","d_slow","off_sl","off_tp","key"], log_dir=LOG_DIR)
-                                    await SIGNAL_Q.put(sig); last_signal_ts[pair] = time.time()
-
-                                elif float(bar.k_fast) >= float(getattr(config, "SCALP_K_SHORT", 90)):
-                                    sl = float(getattr(config, "SCALP_ATR_MULT_SL", 0.9)) * float(bar.atr)
-                                    stop_off = config.SL_CUSHION_MULT * sl + 0.15 * float(bar.atr)
-                                    tp_dist  = float(getattr(config, "SCALP_TP_MULT_OF_SL", 0.7)) * stop_off
-
-                                    telegram.alert_side(pair, bar, TF, "SHORT", stop_off=stop_off, tp_dist=tp_dist, header=header)
-                                    sig = Signal(
-                                        pair, "Sell", bar.c,
-                                        sl=bar.c + stop_off, tp=bar.c - tp_dist,
-                                        key=f"{pair}-{bar.name:%Y%m%d-%H%M}-SCALP",
-                                        ts=bar.name,
-                                        adx=float(bar.adx), k_fast=float(bar.k_fast), k_slow=float(bar.k_slow), d_slow=float(bar.d_slow),
-                                        vol=float(getattr(bar, "v", 0.0)), off_sl=stop_off, off_tp=tp_dist,
-                                    )
-                                    append_csv("signals.csv", {
-                                        "ts": sig.ts.isoformat(), "symbol": sig.symbol, "side": sig.side,
-                                        "entry": float(sig.entry), "sl": float(sig.sl), "tp": float(sig.tp),
-                                        "adx": getattr(sig, "adx", 0.0), "k_fast": getattr(sig, "k_fast", 0.0),
-                                        "k_slow": getattr(sig, "k_slow", 0.0), "d_slow": getattr(sig, "d_slow", 0.0),
-                                        "off_sl": getattr(sig, "off_sl", 0.0), "off_tp": getattr(sig, "off_tp", 0.0),
-                                        "key": sig.key,
-                                    }, ["ts","symbol","side","entry","sl","tp","adx","k_fast","k_slow","d_slow","off_sl","off_tp","key"], log_dir=LOG_DIR)
-                                    await SIGNAL_Q.put(sig); last_signal_ts[pair] = time.time()
-                        except Exception as _e:
-                            logging.warning("[%s] MR-Scalp block skipped due to error: %s", pair, _e)
-
                     # AFTER decision: keep HTF/H1 fresh (same order as live)
                     htf_levels = update_htf_levels_new(htf_levels, bar)
                     h1 = update_h1(h1, bar.name, float(bar.c))
@@ -626,6 +578,12 @@ async def consume(router: RiskRouter):
         return width * (0.5 + 0.5 * adx_w) * (0.5 + 0.5 * stoch_w)
 
     while True:
+        today = datetime.utcnow().date().isoformat()
+        if daily_count[today] >= getattr(config, "MAX_TRADES_PER_DAY", 3):
+            logging.info("Daily trade cap reached - waiting for next day")
+            await asyncio.sleep(60)  # Sleep 1 min, then recheck
+            continue  # Skip this iteration, don't exit forever
+
         # ── 1) Coalesce a small batch of signals
         sig0 = await SIGNAL_Q.get()
         batch = [sig0]
@@ -718,15 +676,14 @@ async def consume(router: RiskRouter):
                 sell_used += 1
             if cid:
                 busy_clusters.add(cid)
-
-            # (Optional) if your router can estimate added risk, bump risk_used here:
-            # if hasattr(router, "estimate_risk_pct"):
-            #     risk_used += router.estimate_risk_pct(s)
             try:
                 await router.handle(s)
+                daily_count[today] += 1  # Track the trade
                 logging.info(
-                    "Processed: %s | reserved open=%d (buy=%d/sell=%d) risk≈%.1f%%",
+                    "Processed: %s | daily=%d/%d | reserved open=%d (buy=%d/sell=%d) risk≈%.1f%%",
                     s.symbol,
+                    daily_count[today],
+                    getattr(config, "MAX_TRADES_PER_DAY", 3),
                     open_used,
                     buy_used,
                     sell_used,

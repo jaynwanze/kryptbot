@@ -35,6 +35,6 @@ def tjr_short_signal(df, i, htf_row, min_checks=3) -> bool:
         return False
     checks = 0
     checks += ltf.is_bos(df, i, "short", left=2, right=2)
-    checks += ltf.has_fvg(df, i-1, "short", min_gap_frac=0.25)
-    checks += ltf.fib_tag(bar, "short", frac=0.33)
+    checks += ltf.has_fvg(df, i-1, "short", min_gap_frac=0.35)
+    checks += ltf.fib_tag(bar, "short", frac=0.618)
     return checks >= min_checks

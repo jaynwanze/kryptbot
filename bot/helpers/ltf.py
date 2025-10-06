@@ -22,26 +22,17 @@ def is_bos(df: pd.DataFrame, idx: int, direction: str,
         return df.c.iloc[idx] < win.iloc[pivot_idx]
 
 # --- Fair-value gap detection ------------
-def has_fvg(df: pd.DataFrame, idx: int, direction: str, min_gap_frac=0.3) -> bool:
-    """
-    3‑candle Fair‑Value‑Gap:
-        bullish → candle‑0 high < candle‑2 low
-        bearish → candle‑0 low  > candle‑2 high
-    *idx* is the **middle** candle.
-    """
+def has_fvg(df, idx, direction, min_gap_frac=0.35):
     if idx < 2:
-        return False                     # need three candles
-
-    c0, c1, c2 = df.iloc[idx-2], df.iloc[idx-1], df.iloc[idx]   # all historical
-
-    MIN_GAP_ATR = min_gap_frac
+        return False
+    c0, c1, c2 = df.iloc[idx-2], df.iloc[idx-1], df.iloc[idx]
 
     gap_px = (c0.h - c2.l) if direction == "long" else (c2.h - c0.l)
-    return gap_px >= MIN_GAP_ATR * c1.atr
+    return gap_px >= min_gap_frac * c1.atr 
 
 
-# # ── 79 % fib touch of the *same candle* that raided liquidity ──
-def fib_tag(bar, direction: str, frac=None, use_close=True) -> bool:
+# ── 61.8% fib touch of the *same candle* that raided liquidity ──
+def fib_tag(bar, direction: str, frac=0.618, use_close=True) -> bool:
     frac = frac or config.FIB_EXT  # e.g. 0.79–0.90
     rng = bar.h - bar.l
     if rng <= 0:
