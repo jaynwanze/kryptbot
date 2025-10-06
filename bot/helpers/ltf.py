@@ -22,17 +22,17 @@ def is_bos(df: pd.DataFrame, idx: int, direction: str,
         return df.c.iloc[idx] < win.iloc[pivot_idx]
 
 # --- Fair-value gap detection ------------
-def has_fvg(df, idx, direction, min_gap_frac=0.35):
+def has_fvg(df, idx, direction, min_gap_frac=0.30):
     if idx < 2:
         return False
     c0, c1, c2 = df.iloc[idx-2], df.iloc[idx-1], df.iloc[idx]
 
     gap_px = (c0.h - c2.l) if direction == "long" else (c2.h - c0.l)
-    return gap_px >= min_gap_frac * c1.atr 
+    return gap_px >= min_gap_frac * c1.atr
 
 
 # ── 61.8% fib touch of the *same candle* that raided liquidity ──
-def fib_tag(bar, direction: str, frac=0.618, use_close=True) -> bool:
+def fib_tag(bar, direction: str, frac=0.50, use_close=True) -> bool:
     frac = frac or config.FIB_EXT  # e.g. 0.79–0.90
     rng = bar.h - bar.l
     if rng <= 0:

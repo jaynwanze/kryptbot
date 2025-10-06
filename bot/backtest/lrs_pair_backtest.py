@@ -241,8 +241,8 @@ def backtest(df: pd.DataFrame,
             rr_target = getattr(config, "RR_TARGET", 1.5)
             tp_dist = rr_target * stop_off
 
-            # --- Signal checks (EXACTLY as live) ---
-            min_checks = 2 if bar.adx >= 25 else 3
+            # --- Signal checks
+            min_checks = 2
             k_long = getattr(config, "MOMENTUM_STO_K_LONG", 30)
             k_short = getattr(config, "MOMENTUM_STO_K_SHORT", 70)
             min_h1_slope = getattr(config, "MIN_H1_SLOPE", 0.10)

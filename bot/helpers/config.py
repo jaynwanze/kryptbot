@@ -4,7 +4,7 @@
 from typing import List
 
 
-PAIR = "ATOMUSDT"  # Bybit symbol: SOL/ATOM/WAVES/XRP
+PAIR = "AAVEUSDT"  # Bybit symbol: SOL/ATOM/WAVES/XRP
 TF_SECONDS = 15 * 60  # 15‑minute bars
 INTERVAL = "15"  # stream interval, string
 LOOKBACK_BARS = 800  # kept in memory (≈ 8 days)
@@ -25,24 +25,26 @@ SL_CUSHION_MULT = 1.3  # was a hidden “1.6”; make it explicit & multiplicati
 WICK_BUFFER = (
     0.25  # in ATR units              # extra cushion for SL (to avoid false hits)
 )
-# ── Momentum tuning (higher quality, still active)
-# In config.py, adjust these:
-ADX_HARD_FLOOR = 25              # down from 30
-NEAR_HTF_MAX_ATR_MOM = 0.9       # up from 0.7
-MOMENTUM_STO_K_LONG = 35         # up from 30
-MOMENTUM_STO_K_SHORT = 65        # down from 70
-MIN_H1_SLOPE = 0.05              # down from 0.10
-# SESSION_WINDOWS = {"all": (0, 24)}  # trade 24/7
+# Core filters - STRICT
+ADX_HARD_FLOOR = 25              # Higher floor for quality
+NEAR_HTF_MAX_ATR_MOM = 0.9       # Must be close to HTF levels
+MOMENTUM_STO_K_LONG = 35         # Tighter oversold
+MOMENTUM_STO_K_SHORT = 65        # Tighter overbought
+MIN_H1_SLOPE = 0.05              # Moderate slope requirement
 
-# SESSION_WINDOWS = {
-#     "eu": (7, 12),    # 5 hours (was 3)
-#     "ny": (13, 17),   # 4 hours (was 3)
-# }
+# Cooldowns
+COOLDOWN_DAYS_AFTER_SL = 0.5    # 12 hours
+COOLDOWN_DAYS_AFTER_TP = 0.25   # 6 hours
+
+# Also consider:
+COOLDOWN_DAYS_AFTER_TP = 0.0     # remove TP cooldown entirely
+MAX_TRADES_PER_DAY = 5           # allow more opportunities
 SESSION_WINDOWS = {
     "asia": (0, 8),   # 00–08 UTC
     "eu":   (7, 16),  # 07–16 UTC
     "ny":   (13, 22), # 13–22 UTC
 }
+
 # ── MR Scalp profile (quiet-regime filler)
 # SCALP_ON = True                  # quick on/off
 # SCALP_ADX_MAX = 18               # only when sleepy

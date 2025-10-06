@@ -323,6 +323,19 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                         htf_levels = update_htf_levels_new(htf_levels, bar)
                         continue
 
+                    # 5.6) Cool-down after TP hit on ANY pair (configurable)
+                    if COOLDOWN_DAYS_AFTER_TP > 0 and router.last_tp_ts:
+                        last_tp = max(router.last_tp_ts.values())
+                        if (time.time() - last_tp) < (COOLDOWN_DAYS_AFTER_TP * 86400):
+                            left_days = (COOLDOWN_DAYS_AFTER_TP * 86400 - (time.time() - last_tp)) / 86400.0
+                            logging.info(
+                                "[%s] Cool-down after TP active — %.2f days left",
+                                pair,
+                                left_days,
+                            )
+                            h1 = update_h1(h1, bar.name, float(bar.c))
+                            htf_levels = update_htf_levels_new(htf_levels, bar)
+                            continue
                     # Distances
                     cushion = 1.3 if bar.adx >= 30 else 1.5  # tighter in trends
                     sl_base = cushion * bar.atr
@@ -336,7 +349,7 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                     header = "LRS MULTI-PAIR Engine (low-freq)"
 
                     # Check if we have enough confirmations
-                    min_checks = 2 if bar.adx >= 25 else 3
+                    min_checks = 2
 
                  # 6) Look for new entries (if flat)
                     decision_log = {
@@ -436,7 +449,7 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                     # Shorts: need tjr_short AND H1 slope down AND stoch high
                     elif (
                         bar.k_fast >= getattr(config, "MOMENTUM_STO_K_SHORT", 70)
-                        and h1row.slope < getattr(config, "MIN_H1_SLOPE", 0.10)
+                       and h1row.slope < -getattr(config, "MIN_H1_SLOPE", 0.10)  
                         and tjr_short_signal(hist, i, htf_row, min_checks)
                     ):
                         if router.has_open(pair):
