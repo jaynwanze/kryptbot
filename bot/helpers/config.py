@@ -4,7 +4,7 @@
 from typing import List
 
 
-PAIR = "SUIUSDT"  # Bybit symbol: SOL/ATOM/WAVES/XRP
+PAIR = "ATOMUSDT"  # Bybit symbol: SOL/ATOM/WAVES/XRP
 TF_SECONDS = 15 * 60  # 15‑minute bars
 INTERVAL = "15"  # stream interval, string
 LOOKBACK_BARS = 800  # kept in memory (≈ 8 days)
@@ -32,17 +32,17 @@ NEAR_HTF_MAX_ATR_MOM = 0.9       # up from 0.7
 MOMENTUM_STO_K_LONG = 35         # up from 30
 MOMENTUM_STO_K_SHORT = 65        # down from 70
 MIN_H1_SLOPE = 0.05              # down from 0.10
-SESSION_WINDOWS = {"all": (0, 24)}  # trade 24/7
+# SESSION_WINDOWS = {"all": (0, 24)}  # trade 24/7
 
 # SESSION_WINDOWS = {
 #     "eu": (7, 12),    # 5 hours (was 3)
 #     "ny": (13, 17),   # 4 hours (was 3)
 # }
-# SESSION_WINDOWS = {
-#     "asia": (0, 8),   # 00–08 UTC
-#     "eu":   (7, 16),  # 07–16 UTC
-#     "ny":   (13, 22), # 13–22 UTC
-# }
+SESSION_WINDOWS = {
+    "asia": (0, 8),   # 00–08 UTC
+    "eu":   (7, 16),  # 07–16 UTC
+    "ny":   (13, 22), # 13–22 UTC
+}
 # ── MR Scalp profile (quiet-regime filler)
 # SCALP_ON = True                  # quick on/off
 # SCALP_ADX_MAX = 18               # only when sleepy

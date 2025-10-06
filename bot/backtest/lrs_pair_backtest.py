@@ -5,6 +5,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional, List, Dict
+from collections import defaultdict
 
 import asyncio
 import logging
@@ -14,67 +15,93 @@ from bot.data import preload_history
 from bot.helpers import (
     config, compute_indicators, build_htf_levels, update_htf_levels_new,
     tjr_long_signal, tjr_short_signal, round_price, align_by_close,
-    fees_usd, next_open_price, build_h1, update_h1, raid_happened, ltf
+    fees_usd, build_h1, update_h1, near_htf_level, in_good_hours, veto_thresholds
 )
 
-# --- knobs to mimic live fills ---
-STOP_FIRST   = True         # if both TP & SL are hit in a candle, count SL first
-ENTRY_POLICY = "next_open"  # or "close"
-PENDING_BARS = 2            # how many bars a pending ticket can wait for its fib-tag
+# --- Execution realism ---
+STOP_FIRST = True  # if both TP & SL hit in same candle, assume SL first
+EXEC_DELAY_SEC = 8  # avg delay between candle close and order fill
 
 @dataclass
 class Position:
-    dir: int                     # +1 long, -1 short
+    dir: int  # +1 long, -1 short
     entry: float
     sl: float
     tp: float
-    qty: float                   # position size in base currency
-    risk: float                  # USD at risk at entry time
-    time_entry: pd.Timestamp     # timestamp of entry (i+1)
-    time_close: Optional[pd.Timestamp] = None  # timestamp of exit (if closed)
+    qty: float
+    risk: float
+    time_entry: pd.Timestamp
+    time_close: Optional[pd.Timestamp] = None
+    adx_entry: float = 0.0
+    k_entry: float = 0.0
 
 
 def backtest(df: pd.DataFrame,
-             equity0: float = config.STAKE_SIZE_USD,
-             risk_pct: float = config.RISK_PCT,
-             pair: str = config.PAIR):
-
-    # 1) compute indicators once (rolling ops use only past values)
+             equity0: float = 1000.0,
+             risk_pct: float = 0.1,
+             pair: str = "LINKUSDT"):
+    """
+    Backtest aligned with live engine (lrs_pair_engine.py).
+    Applies ALL gates: HTF proximity, session, veto, cooldown, daily cap, etc.
+    """
+    # 1) Compute indicators
     df = compute_indicators(df.copy())
 
-    # 2) build HTF levels & H1 trend once; we’ll snapshot/update each bar
+    # 2) Build HTF levels & H1 trend
     htf_levels = build_htf_levels(df.copy())
-    h1         = build_h1(df.copy())
+    h1 = build_h1(df.copy())
+
+    # 3) Session hours (from config)
+    session_windows = getattr(config, "SESSION_WINDOWS", {})
+    good_hours = set()
+    for h0, h1_end in session_windows.values():
+        good_hours.update(range(h0, h1_end))
+    session_gating = len(good_hours) < 24
 
     equity = equity0
     pos: Optional[Position] = None
     trades: List[Dict] = []
     curve: List[float] = []
 
+    # Cooldown tracking (per-pair, but we're single-pair here)
+    last_sl_ts = 0.0
+    last_tp_ts = 0.0
+    cooldown_sl_sec = getattr(config, "COOLDOWN_DAYS_AFTER_SL", 0.5) * 86400
+    cooldown_tp_sec = getattr(config, "COOLDOWN_DAYS_AFTER_TP", 0.25) * 86400
+
+    # Daily trade cap
+    daily_count = defaultdict(int)
+    max_daily = getattr(config, "MAX_TRADES_PER_DAY", 3)
+
+    # DIAGNOSTIC: track why signals are rejected
+    drop_stats = {
+        "total_bars": 0,
+        "na_guard": 0,
+        "htf_missing": 0,
+        "not_near_htf": 0,
+        "off_session": 0,
+        "h1_missing": 0,
+        "veto_adx": 0,
+        "veto_atr": 0,
+        "cooldown_sl": 0,
+        "cooldown_tp": 0,
+        "daily_cap": 0,
+        "no_ltf_long": 0,
+        "no_ltf_short": 0,
+        "has_open": 0,
+    }
 
     for i, (idx, bar) in enumerate(df.iterrows()):
         bar = df.iloc[i]
+        drop_stats["total_bars"] += 1
 
-        # live-like NA guard
+        # Indicator warm-up guard (same as live)
         if bar[["atr", "atr30", "adx", "k_fast"]].isna().any():
+            drop_stats["na_guard"] += 1
             curve.append(equity)
             continue
 
-        # HTF snapshot via ffill (same as live)
-        idx_prev = htf_levels.index.get_indexer([bar.name], method="ffill")[0]
-        if idx_prev == -1:
-            curve.append(equity)
-            continue
-        htf_row = htf_levels.iloc[idx_prev]
-
-        # H1 slope row (guard early if not yet available)
-        try:
-            h1row = h1.loc[bar.name.floor("1h")]
-        except KeyError:
-            curve.append(equity)
-            continue
-
-        # --- manage open position (only from its entry bar onward) ---
+        # --- Manage open position ---
         if pos is not None:
             if pos.dir == 1:
                 hit_sl = bar.l <= pos.sl
@@ -92,98 +119,314 @@ def backtest(df: pd.DataFrame,
                 reason = "SL"
 
             if reason:
-                if reason == "SL":
-                    exit_px   = pos.sl
-                    pnl_gross = pos.dir * pos.qty * (exit_px - pos.entry)
-                    fee       = fees_usd(pos.entry, exit_px, pos.qty, config.FEE_BPS)
-                    pnl       = pnl_gross - fee
-                else:
-                    exit_px   = pos.tp
-                    pnl_gross = pos.dir * pos.qty * (exit_px - pos.entry)
-                    fee       = fees_usd(pos.entry, exit_px, pos.qty, config.FEE_BPS)
-                    pnl       = pnl_gross - fee
+                exit_px = pos.sl if reason == "SL" else pos.tp
+                pnl_gross = pos.dir * pos.qty * (exit_px - pos.entry)
+                fee = fees_usd(pos.entry, exit_px, pos.qty, config.FEE_BPS)
+                pnl = pnl_gross - fee
 
                 equity += pnl
+
+                # Update cooldown trackers
+                bar_ts = bar.name.timestamp()
+                if reason == "SL":
+                    last_sl_ts = bar_ts
+                else:
+                    last_tp_ts = bar_ts
+
                 trades.append(dict(
                     dir="LONG" if pos.dir == 1 else "SHORT",
                     t_entry=pos.time_entry, t_exit=bar.name,
                     entry=pos.entry, sl=pos.sl, tp=pos.tp,
-                    exit=exit_px, reason=reason, pnl=pnl, equity=equity
+                    exit=exit_px, reason=reason,
+                    pnl=pnl, equity=equity,
+                    adx=pos.adx_entry, k_fast=pos.k_entry
                 ))
-                logging.info("[%s] %s %s | entry %.3f sl %.3f tp %.3f | exit %.3f | pnl $%.2f | eq $%.2f",
-                             pair, trades[-1]["dir"], reason,
-                             pos.entry, pos.sl, pos.tp, exit_px, pnl, equity)
+                logging.info(
+                    "[%s] %s %s | entry %.4f sl %.4f tp %.4f | exit %.4f | pnl $%.2f | eq $%.2f",
+                    pair, trades[-1]["dir"], reason,
+                    pos.entry, pos.sl, pos.tp, exit_px, pnl, equity
+                )
                 pos = None
 
-        # --- look for new entry if flat ---
+        # --- Look for new entry if flat ---
         if pos is None:
-            # same veto as live engine (slightly relaxed vs earlier)
-            vol_norm = bar.atr / bar.atr30
-            min_adx  = 12 + 6 * vol_norm       # was 10 + 8 * vol_norm
-            atr_veto = 0.45 + 0.25 * vol_norm  # was 0.5 + 0.3 * vol_norm
-            if bar.adx < min_adx or bar.atr < atr_veto * bar.atr30:
-                curve.append(equity)
-                # AFTER decision (none), keep HTF/H1 fresh
+            # HTF snapshot (same as live)
+            try:
+                idx_prev = htf_levels.index.get_indexer([bar.name], method="ffill")[0]
+                if idx_prev == -1:
+                    drop_stats["htf_missing"] += 1
+                    htf_levels = update_htf_levels_new(htf_levels, bar)
+                    h1 = update_h1(h1, bar.name, float(bar.c))
+                    curve.append(equity)
+                    continue
+                htf_row = htf_levels.iloc[idx_prev]
+            except Exception:
+                drop_stats["htf_missing"] += 1
                 htf_levels = update_htf_levels_new(htf_levels, bar)
-                h1         = update_h1(h1, idx, float(bar.c))
+                h1 = update_h1(h1, bar.name, float(bar.c))
+                curve.append(equity)
                 continue
 
-            # SL/TP distances
-            sl_base  = config.ATR_MULT_SL * bar.atr
-            stop_off = config.SL_CUSHION_MULT * sl_base + config.WICK_BUFFER * bar.atr
-            tp_dist  = config.RR_TARGET * stop_off
+            # 1) HTF proximity gate
+            max_atr_mom = getattr(config, "NEAR_HTF_MAX_ATR_MOM", 0.7)
+            if not near_htf_level(bar, htf_row, max_atr=max_atr_mom):
+                drop_stats["not_near_htf"] += 1
+                htf_levels = update_htf_levels_new(htf_levels, bar)
+                h1 = update_h1(h1, bar.name, float(bar.c))
+                curve.append(equity)
+                continue
 
-            # 2) Normal immediate entries (with H1 slope gates)
-            if pos is None and tjr_long_signal(df, i, htf_row) and (h1row.slope > 0):
-                side     = "LONG"; dir_ = 1
-                entry    = next_open_price(df, i, side, pair, config.SLIP_BPS)
+            # 2) Session gate
+            if session_gating and not in_good_hours(bar.name, good_hours=good_hours):
+                drop_stats["off_session"] += 1
+                htf_levels = update_htf_levels_new(htf_levels, bar)
+                h1 = update_h1(h1, bar.name, float(bar.c))
+                curve.append(equity)
+                continue
+
+            # 3) H1 slope row
+            try:
+                h1row = h1.loc[bar.name.floor("1h")]
+            except KeyError:
+                drop_stats["h1_missing"] += 1
+                h1 = update_h1(h1, bar.name, float(bar.c))
+                curve.append(equity)
+                continue
+
+            # 4) Market-quality veto (EXACTLY as live)
+            min_adx, atr_veto = veto_thresholds(bar)
+            adx_hard_floor = getattr(config, "ADX_HARD_FLOOR", 30)
+            min_adx = max(min_adx, adx_hard_floor)
+
+            veto = (bar.adx < min_adx or bar.atr < atr_veto * bar.atr30)
+            if veto:
+                if bar.adx < min_adx:
+                    drop_stats["veto_adx"] += 1
+                if bar.atr < atr_veto * bar.atr30:
+                    drop_stats["veto_atr"] += 1
+                htf_levels = update_htf_levels_new(htf_levels, bar)
+                h1 = update_h1(h1, bar.name, float(bar.c))
+                curve.append(equity)
+                continue
+
+            # 5) Cooldown checks (same as live)
+            bar_ts = bar.name.timestamp()
+            if last_sl_ts and (bar_ts - last_sl_ts) < cooldown_sl_sec:
+                drop_stats["cooldown_sl"] += 1
+                htf_levels = update_htf_levels_new(htf_levels, bar)
+                h1 = update_h1(h1, bar.name, float(bar.c))
+                curve.append(equity)
+                continue
+            if last_tp_ts and (bar_ts - last_tp_ts) < cooldown_tp_sec:
+                drop_stats["cooldown_tp"] += 1
+                htf_levels = update_htf_levels_new(htf_levels, bar)
+                h1 = update_h1(h1, bar.name, float(bar.c))
+                curve.append(equity)
+                continue
+
+            # 6) Daily trade cap
+            day_key = bar.name.date().isoformat()
+            if daily_count[day_key] >= max_daily:
+                drop_stats["daily_cap"] += 1
+                htf_levels = update_htf_levels_new(htf_levels, bar)
+                h1 = update_h1(h1, bar.name, float(bar.c))
+                curve.append(equity)
+                continue
+
+            # --- SL/TP calculation (EXACTLY as live) ---
+            cushion = 1.3 if bar.adx >= 30 else 1.5
+            sl_base = cushion * bar.atr
+            wick_buf = getattr(config, "WICK_BUFFER", 0.25)
+            stop_off = cushion * sl_base + wick_buf * bar.atr
+            rr_target = getattr(config, "RR_TARGET", 1.5)
+            tp_dist = rr_target * stop_off
+
+            # --- Signal checks (EXACTLY as live) ---
+            min_checks = 2 if bar.adx >= 25 else 3
+            k_long = getattr(config, "MOMENTUM_STO_K_LONG", 30)
+            k_short = getattr(config, "MOMENTUM_STO_K_SHORT", 70)
+            min_h1_slope = getattr(config, "MIN_H1_SLOPE", 0.10)
+
+            # LONG signal
+            if (bar.k_fast <= k_long
+                and h1row.slope > min_h1_slope
+                and tjr_long_signal(df, i, htf_row, min_checks=min_checks)):
+
+                # Entry with execution delay (simulate market order at next bar open + slippage)
+                if i + 1 < len(df):
+                    next_bar = df.iloc[i + 1]
+                    entry = float(next_bar.o) * (1 + config.SLIP_BPS / 10_000)
+                else:
+                    entry = float(bar.c) * (1 + config.SLIP_BPS / 10_000)
+
                 risk_usd = equity0 * risk_pct
-                qty      = risk_usd / stop_off
-                sl       = round_price(entry - stop_off, pair)
-                tp       = round_price(entry + tp_dist,  pair)
-                pos = Position(dir=dir_, entry=entry, sl=sl, tp=tp, qty=qty,
-                               risk=risk_usd, time_entry=idx, time_close=None)
-                logging.info("[%s] %s signal @ %s | entry %.3f sl %.3f tp %.3f | adx %.1f k_fast %.1f",
-                             pair, side, idx, entry, sl, tp, bar.adx, bar.k_fast)
+                qty = risk_usd / stop_off
+                sl = round_price(entry - stop_off, pair)
+                tp = round_price(entry + tp_dist, pair)
 
-            elif pos is None and tjr_short_signal(df, i, htf_row) and (h1row.slope < 0):
-                side     = "SHORT"; dir_ = -1
-                entry    = next_open_price(df, i, side, pair, config.SLIP_BPS)
+                pos = Position(
+                    dir=1, entry=entry, sl=sl, tp=tp, qty=qty,
+                    risk=risk_usd, time_entry=bar.name,
+                    adx_entry=float(bar.adx), k_entry=float(bar.k_fast)
+                )
+                daily_count[day_key] += 1
+                logging.info(
+                    "[%s] LONG @ %s | entry %.4f sl %.4f tp %.4f | adx %.1f k %.1f | daily %d/%d",
+                    pair, bar.name, entry, sl, tp, bar.adx, bar.k_fast,
+                    daily_count[day_key], max_daily
+                )
+
+            # SHORT signal
+            elif (bar.k_fast >= k_short
+                  and h1row.slope < -min_h1_slope
+                  and tjr_short_signal(df, i, htf_row, min_checks=min_checks)):
+
+                if i + 1 < len(df):
+                    next_bar = df.iloc[i + 1]
+                    entry = float(next_bar.o) * (1 - config.SLIP_BPS / 10_000)
+                else:
+                    entry = float(bar.c) * (1 - config.SLIP_BPS / 10_000)
+
                 risk_usd = equity0 * risk_pct
-                qty      = risk_usd / stop_off
-                sl       = round_price(entry + stop_off, pair)
-                tp       = round_price(entry - tp_dist,  pair)
-                pos = Position(dir=dir_, entry=entry, sl=sl, tp=tp, qty=qty,
-                               risk=risk_usd, time_entry=idx, time_close=None)
-                logging.info("[%s] %s signal @ %s | entry %.3f sl %.3f tp %.3f | adx %.1f k_fast %.1f",
-                             pair, side, idx, entry, sl, tp, bar.adx, bar.k_fast)
+                qty = risk_usd / stop_off
+                sl = round_price(entry + stop_off, pair)
+                tp = round_price(entry - tp_dist, pair)
 
-        # AFTER decision, keep HTF/H1 map fresh (same order as live)
+                pos = Position(
+                    dir=-1, entry=entry, sl=sl, tp=tp, qty=qty,
+                    risk=risk_usd, time_entry=bar.name,
+                    adx_entry=float(bar.adx), k_entry=float(bar.k_fast)
+                )
+                daily_count[day_key] += 1
+                logging.info(
+                    "[%s] SHORT @ %s | entry %.4f sl %.4f tp %.4f | adx %.1f k %.1f | daily %d/%d",
+                    pair, bar.name, entry, sl, tp, bar.adx, bar.k_fast,
+                    daily_count[day_key], max_daily
+                )
+            else:
+                # Track LTF rejections
+                if h1row.slope > 0:
+                    drop_stats["no_ltf_long"] += 1
+                elif h1row.slope < 0:
+                    drop_stats["no_ltf_short"] += 1
+
+        # AFTER decision: update HTF/H1 (same order as live)
         htf_levels = update_htf_levels_new(htf_levels, bar)
-        h1         = update_h1(h1, idx, float(bar.c))
+        h1 = update_h1(h1, bar.name, float(bar.c))
         curve.append(equity)
 
-    # --- summary ---
-    wins   = sum(1 for t in trades if t["pnl"] > 0)
+    # --- Summary ---
+    wins = sum(1 for t in trades if t["pnl"] > 0)
     losses = sum(1 for t in trades if t["pnl"] < 0)
-    total  = wins + losses
+    total = wins + losses
     gp = sum(t["pnl"] for t in trades if t["pnl"] > 0)
     gl = -sum(t["pnl"] for t in trades if t["pnl"] < 0)
-    pf = float("inf") if gl == 0 else gp / gl
+    pf = float("inf") if gl == 0 else (gp / gl if gl > 0 else 0)
 
     summary = dict(
         pair=pair, trades=total, wins=wins, losses=losses,
-        win_rate=(wins/total) if total else 0.0, profit_factor=pf,
-        equity_final=equity, rr=f"{config.RR_TARGET}:{config.ATR_MULT_SL}",
-        risk_pct=risk_pct
+        win_rate=(wins / total * 100) if total else 0.0,
+        profit_factor=pf,
+        equity_final=equity,
+        net_pnl=equity - equity0,
+        avg_win=gp / wins if wins else 0,
+        avg_loss=gl / losses if losses else 0,
+        rr_target=rr_target,
+        risk_pct=risk_pct * 100
     )
+
+    # Print drop stats
+    print("\n" + "="*80)
+    print("FILTER ANALYSIS (why signals were rejected)")
+    print("="*80)
+    print(f"Total bars processed........ {drop_stats['total_bars']:>8}")
+    print(f"  NA guard (warm-up)........ {drop_stats['na_guard']:>8} ({drop_stats['na_guard']/drop_stats['total_bars']*100:>5.1f}%)")
+    print(f"  HTF missing............... {drop_stats['htf_missing']:>8} ({drop_stats['htf_missing']/drop_stats['total_bars']*100:>5.1f}%)")
+    print(f"  Not near HTF level........ {drop_stats['not_near_htf']:>8} ({drop_stats['not_near_htf']/drop_stats['total_bars']*100:>5.1f}%)")
+    print(f"  Off session hours......... {drop_stats['off_session']:>8} ({drop_stats['off_session']/drop_stats['total_bars']*100:>5.1f}%)")
+    print(f"  H1 missing................ {drop_stats['h1_missing']:>8} ({drop_stats['h1_missing']/drop_stats['total_bars']*100:>5.1f}%)")
+    print(f"  Veto: ADX too low......... {drop_stats['veto_adx']:>8} ({drop_stats['veto_adx']/drop_stats['total_bars']*100:>5.1f}%)")
+    print(f"  Veto: ATR too low......... {drop_stats['veto_atr']:>8} ({drop_stats['veto_atr']/drop_stats['total_bars']*100:>5.1f}%)")
+    print(f"  Cooldown after SL......... {drop_stats['cooldown_sl']:>8} ({drop_stats['cooldown_sl']/drop_stats['total_bars']*100:>5.1f}%)")
+    print(f"  Cooldown after TP......... {drop_stats['cooldown_tp']:>8} ({drop_stats['cooldown_tp']/drop_stats['total_bars']*100:>5.1f}%)")
+    print(f"  Daily cap reached......... {drop_stats['daily_cap']:>8} ({drop_stats['daily_cap']/drop_stats['total_bars']*100:>5.1f}%)")
+    print(f"  No LTF long confirmation.. {drop_stats['no_ltf_long']:>8} ({drop_stats['no_ltf_long']/drop_stats['total_bars']*100:>5.1f}%)")
+    print(f"  No LTF short confirmation. {drop_stats['no_ltf_short']:>8} ({drop_stats['no_ltf_short']/drop_stats['total_bars']*100:>5.1f}%)")
+    print("="*80 + "\n")
+
     return summary, trades, pd.Series(curve, index=df.index[:len(curve)])
 
 
+def print_trades_table(trades: List[Dict]):
+    """Print formatted trade log."""
+    if not trades:
+        print("\nNo trades executed.")
+        return
+
+    print(f"\n{'='*100}")
+    print(f"{'Entry Time':<20} {'Dir':<6} {'Entry':<8} {'Exit':<8} {'Reason':<6} {'PnL':<10} {'Equity':<10}")
+    print(f"{'='*100}")
+    for t in trades:
+        print(f"{str(t['t_entry']):<20} {t['dir']:<6} "
+              f"{t['entry']:<8.4f} {t['exit']:<8.4f} {t['reason']:<6} "
+              f"${t['pnl']:>8.2f} ${t['equity']:>9.2f}")
+    print(f"{'='*100}\n")
+
+
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)s  %(message)s")
-    logging.info("LRS back-test starting  %s", datetime.now(timezone.utc).strftime("%F %T"))
-    hist = asyncio.run(preload_history(symbol=config.PAIR, interval=config.INTERVAL, limit=3000))
-    hist = align_by_close(hist, int(config.INTERVAL))
-    summary, trades, curve = backtest(hist, equity0=config.STAKE_SIZE_USD, risk_pct=config.RISK_PCT, pair=config.PAIR)
-    print("Summary:", summary)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s  %(levelname)s  %(message)s"
+    )
+
+    # Config
+    pair = getattr(config, "PAIR", "LINKUSDT")
+    interval = getattr(config, "INTERVAL", "15")
+    equity = getattr(config, "STAKE_SIZE_USD", 1000.0)
+    risk_pct = getattr(config, "RISK_PCT", 0.1)
+
+    logging.info("="*80)
+    logging.info("LRS ALIGNED BACKTEST (matches live engine)")
+    logging.info("Pair: %s | TF: %sm | Starting Equity: $%.2f | Risk/Trade: %.1f%%",
+                 pair, interval, equity, risk_pct * 100)
+    logging.info("="*80)
+
+    # Load 30 days of data (30 days × 96 bars/day = 2880 bars for 15m)
+    hist = asyncio.run(preload_history(
+        symbol=pair,
+        interval=interval,
+        limit=3000  # ~31 days of 15m bars
+    ))
+
+    hist = align_by_close(hist, int(interval))
+
+    logging.info("Data loaded: %d bars (%s to %s)",
+                 len(hist), hist.index[0], hist.index[-1])
+
+    # Run backtest
+    summary, trades, curve = backtest(
+        hist,
+        equity0=equity,
+        risk_pct=risk_pct,
+        pair=pair
+    )
+
+    # Display results
+    print("\n" + "="*80)
+    print("BACKTEST SUMMARY")
+    print("="*80)
+    for k, v in summary.items():
+        if isinstance(v, float):
+            print(f"{k:.<30} {v:>12.2f}")
+        else:
+            print(f"{k:.<30} {v:>12}")
+    print("="*80)
+
+    print_trades_table(trades)
+
+    # Save to CSV
+    if trades:
+        df_trades = pd.DataFrame(trades)
+        output_file = f"backtest_trades_{pair}_{datetime.now():%Y%m%d_%H%M}.csv"
+        df_trades.to_csv(output_file, index=False)
+        logging.info("Trades saved to %s", output_file)
