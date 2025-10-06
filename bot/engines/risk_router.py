@@ -116,6 +116,7 @@ class RiskRouter:
 
         # cool-down bookkeeping (start only on SL)
         self.last_sl_ts: dict[str, float] = defaultdict(float)
+        self.last_tp_ts: dict[str, float] = defaultdict(float)
 
         # working state
         self.book: dict[str, Position] = {}
@@ -238,7 +239,7 @@ class RiskRouter:
         ):
             logging.info("[%s] Skip: already have an open/pending position", sig.symbol)
             return
-        
+
         # portfolio concurrency guard
         if self.open_count() >= self.max_open_concurrent:
             logging.info(
@@ -920,6 +921,8 @@ class RiskRouter:
         telegram.bybit_alert(
             msg=f"Round-trip closed for {symbol}. {exit_kind}. fees={fees:.6f}. {approx}"
         )
+        if exit_kind.lower() == "takeprofit":
+            self.last_tp_ts[symbol] = time.time()
         try:
             self._accumulate_daily(symbol, exit_kind, gross, fees, net)
         except Exception:
