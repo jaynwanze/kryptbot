@@ -19,8 +19,12 @@ from bot.helpers import (
 )
 
 # --- Execution realism ---
-STOP_FIRST = True  # if both TP & SL hit in same candle, assume SL first
-EXEC_DELAY_SEC = 8  # avg delay between candle close and order fill
+STOP_FIRST = True
+EXEC_DELAY_SEC = 8
+
+# --- Trailing stop config (matches live engine) ---
+BE_ARM_R = 0.8  # Move to BE after +0.8R
+ATR_TRAIL_K = 0.9  # Trail distance = 0.9 * ATR
 
 @dataclass
 class Position:
@@ -34,7 +38,8 @@ class Position:
     time_close: Optional[pd.Timestamp] = None
     adx_entry: float = 0.0
     k_entry: float = 0.0
-
+    be_armed: bool = False  # Track if moved to BE
+    trailing: bool = False  # Track if trailing active
 
 def backtest(df: pd.DataFrame,
              equity0: float = 1000.0,
@@ -44,6 +49,16 @@ def backtest(df: pd.DataFrame,
     Backtest aligned with live engine (lrs_pair_engine.py).
     Applies ALL gates: HTF proximity, session, veto, cooldown, daily cap, etc.
     """
+    # Warm-up guard
+    required_warmup_days = getattr(config, "HTF_DAYS", 15) + 5  # +5 for safety
+    warmup_bars = required_warmup_days * 96  # 96 bars/day for 15m
+    
+    if len(df) < warmup_bars:
+        logging.warning(
+            "Insufficient history! Have %d bars, need %d for HTF warmup",
+            len(df), warmup_bars
+        )
+        
     # 1) Compute indicators
     df = compute_indicators(df.copy())
 
@@ -91,7 +106,10 @@ def backtest(df: pd.DataFrame,
         "has_open": 0,
     }
 
-    for i, (idx, bar) in enumerate(df.iterrows()):
+      # Then iterate only over the TEST period (e.g., last 30 days)
+    test_start_idx = max(0, len(df) - 30*96)  # last 30 days
+    
+    for i in range(test_start_idx, len(df)):
         bar = df.iloc[i]
         drop_stats["total_bars"] += 1
 
@@ -142,9 +160,10 @@ def backtest(df: pd.DataFrame,
                     adx=pos.adx_entry, k_fast=pos.k_entry
                 ))
                 logging.info(
-                    "[%s] %s %s | entry %.4f sl %.4f tp %.4f | exit %.4f | pnl $%.2f | eq $%.2f",
+                    "[%s] %s %s | entry %.4f sl %.4f tp %.4f | exit %.4f | pnl $%.2f | eq $%.2f | adx %.1f k %.1f",
                     pair, trades[-1]["dir"], reason,
-                    pos.entry, pos.sl, pos.tp, exit_px, pnl, equity
+                    pos.entry, pos.sl, pos.tp, exit_px, pnl, equity,
+                    pos.adx_entry, pos.k_entry
                 )
                 pos = None
 
@@ -208,7 +227,7 @@ def backtest(df: pd.DataFrame,
                 h1 = update_h1(h1, bar.name, float(bar.c))
                 curve.append(equity)
                 continue
-
+            
             # 5) Cooldown checks (same as live)
             bar_ts = bar.name.timestamp()
             if last_sl_ts and (bar_ts - last_sl_ts) < cooldown_sl_sec:
@@ -223,7 +242,6 @@ def backtest(df: pd.DataFrame,
                 h1 = update_h1(h1, bar.name, float(bar.c))
                 curve.append(equity)
                 continue
-
             # 6) Daily trade cap
             day_key = bar.name.date().isoformat()
             if daily_count[day_key] >= max_daily:
@@ -309,7 +327,6 @@ def backtest(df: pd.DataFrame,
                     drop_stats["no_ltf_long"] += 1
                 elif h1row.slope < 0:
                     drop_stats["no_ltf_short"] += 1
-
         # AFTER decision: update HTF/H1 (same order as live)
         htf_levels = update_htf_levels_new(htf_levels, bar)
         h1 = update_h1(h1, bar.name, float(bar.c))
@@ -391,11 +408,19 @@ if __name__ == "__main__":
                  pair, interval, equity, risk_pct * 100)
     logging.info("="*80)
 
+    # Determine how much history to load (180 days)
+    days_back = 31
+    bars_needed = days_back * 96  # 96 bars per day for 15m
+    now = datetime.now(timezone.utc)
+    target_start = now - pd.Timedelta(days=days_back)
+    
+    logging.info("Loading %d bars (back to %s)", bars_needed, target_start.date())
+
     # Load 30 days of data (30 days × 96 bars/day = 2880 bars for 15m)
     hist = asyncio.run(preload_history(
         symbol=pair,
         interval=interval,
-        limit=3000  # ~31 days of 15m bars
+        limit=bars_needed  # match live engine
     ))
 
     hist = align_by_close(hist, int(interval))
