@@ -26,7 +26,7 @@ WICK_BUFFER = (
     0.25  # in ATR units              # extra cushion for SL (to avoid false hits)
 )
 # Core filters - STRICT
-ADX_HARD_FLOOR = 25              # Higher floor for quality
+ADX_HARD_FLOOR = 28              # Higher floor for quality
 NEAR_HTF_MAX_ATR_MOM = 0.9       # Must be close to HTF levels
 MOMENTUM_STO_K_LONG = 35         # Tighter oversold
 MOMENTUM_STO_K_SHORT = 65        # Tighter overbought
