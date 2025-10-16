@@ -1391,7 +1391,7 @@ class RiskRouter:
             ]
             
             lines.append("*Top Rejection Reasons:*")
-            for label, count in sorted(rejection_items, key=lambda x: x[1], reverse=True)[:5]:
+            for label, count in sorted(rejection_items, key=lambda x: x[1], reverse=True):
                 if count > 0:
                     pct = (count / total_bars) * 100
                     lines.append(f"{label}: `{count}` ({pct:.1f}%)")
@@ -1402,9 +1402,8 @@ class RiskRouter:
                 pair: sum(stats.values())
                 for pair, stats in config.GLOBAL_DROP_STATS.items()
             }
-            top_pairs = sorted(pair_totals.items(), key=lambda x: x[1], reverse=True)[:5]
-            
-            for pair, total in top_pairs:
+
+            for pair, total in pair_totals.items():
                 stats = config.GLOBAL_DROP_STATS[pair]
                 ltf_rej = stats.get("no_ltf_long", 0) + stats.get("no_ltf_short", 0)
                 adx_rej = stats.get("veto_adx", 0)
