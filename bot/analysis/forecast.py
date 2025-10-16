@@ -9,7 +9,7 @@ client = AsyncClient(api_key=os.getenv("OPENAI_API_KEY"))
 
 async def generate_forecast(router, pairs: list, drop_stats: dict) -> str:
     """
-    Generate AI forecast using Claude API with current market context.
+    Generate AI forecast using OpenAI API with current market context.
     """
     
     # Gather context
@@ -21,7 +21,7 @@ async def generate_forecast(router, pairs: list, drop_stats: dict) -> str:
 # Current System Status
 
 ## Active Pairs ({len(pairs)} pairs)
-{', '.join(pairs[:10])}... (showing first 10)
+{', '.join(pairs)}... (showing all pairs)
 
 ## Recent Performance
 {context['recent_trades']}
@@ -36,12 +36,16 @@ async def generate_forecast(router, pairs: list, drop_stats: dict) -> str:
 - L1 Coins: SOLUSDT, AVAXUSDT, ADAUSDT, NEARUSDT, APTUSDT, SUIUSDT
 - L2 Coins: OPUSDT, ARBUSDT
 - DeFi: AAVEUSDT, UNIUSDT, LDOUSDT
-- Interop: ATOMUSDT, DOTUSDT, INJUSDT
+- Interop: ATOMUSDT, DOTUSDT
+- Payments: XRPUSDT
+- AI: RENDERUSDT
+- Meme: DOGEUSDT
+- Oracle: LINKUSDT
 
 ## Trading Strategy
 - ADX Floor: 28 (strong momentum required)
 - Entry: K_fast < 35 (longs) or > 65 (shorts)
-- LTF Confirmations: Requires 2/3 (BOS, FVG, Fib)
+- LTF Confirmations: Requires 1/3 (BOS, FVG, Fib)
 - Risk: 10% per trade, max 3 trades/day
 
 # Your Task
