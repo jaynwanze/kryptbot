@@ -217,6 +217,11 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                     # Look at drop stats every hour
                     if int(time.time()) % 3600 < TF_SEC:
                         logging.info("DROP_STATS %s %s", pair, drop_stats)
+                        
+                         # global aggregated stats
+                        async with config.GLOBAL_DROP_STATS_LOCK:
+                            for key, val in drop_stats.items():
+                                config.GLOBAL_DROP_STATS[pair][key] = val
 
                     bar = hist.iloc[-1]
                     if bar[["atr", "atr30", "adx", "k_fast"]].isna().any():
@@ -349,7 +354,7 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                     header = "LRS MULTI-PAIR Engine (low-freq)"
 
                     # Check if we have enough confirmations
-                    min_checks = 2
+                    # min_checks = 1
 
                  # 6) Look for new entries (if flat)
                     decision_log = {
@@ -364,14 +369,14 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                         "k_fast": float(bar.k_fast),
                         "h1_slope": float(h1row.slope),
                         "min_adx": min_adx,
-                        "min_checks": min_checks,
+                        # "min_checks": min_checks,
                     }
                     append_csv("decisions.csv", decision_log, list(decision_log.keys()), log_dir=LOG_DIR)
 
                     if (
                         bar.k_fast <= getattr(config, "MOMENTUM_STO_K_LONG", 30)
                         and h1row.slope > getattr(config, "MIN_H1_SLOPE", 0.10)
-                        and tjr_long_signal(hist, i, htf_row, min_checks)
+                        and tjr_long_signal(hist, i, htf_row)
                     ):
                         if router.has_open(pair):
                             logging.info("[%s] No-trade (already open)", pair)
@@ -450,7 +455,7 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                     elif (
                         bar.k_fast >= getattr(config, "MOMENTUM_STO_K_SHORT", 70)
                        and h1row.slope < -getattr(config, "MIN_H1_SLOPE", 0.10)  
-                        and tjr_short_signal(hist, i, htf_row, min_checks)
+                        and tjr_short_signal(hist, i, htf_row)
                     ):
                         if router.has_open(pair):
                             logging.info("[%s] No-trade (already open)", pair)

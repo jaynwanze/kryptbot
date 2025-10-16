@@ -15,7 +15,7 @@ def raid_happened(bar, htf_row, tol_atr: float = 1.5) -> Tuple[bool, str]:
         return True, "short"
     return False, ""
 
-def tjr_long_signal(df, i, htf_row, min_checks=2) -> bool:
+def tjr_long_signal(df, i, htf_row, min_checks=1) -> bool:
     bar, prev = df.iloc[i], df.iloc[i-1]
     raided, side = raid_happened(bar, htf_row)
     if not (raided and side == "long"):
@@ -29,7 +29,7 @@ def tjr_long_signal(df, i, htf_row, min_checks=2) -> bool:
     checks = int(bos) + int(fvg) + int(fib)
     return checks >= min_checks
 
-def tjr_short_signal(df, i, htf_row, min_checks=2) -> bool:
+def tjr_short_signal(df, i, htf_row, min_checks=1) -> bool:
     bar, prev = df.iloc[i], df.iloc[i-1]
     raided, side = raid_happened(bar, htf_row)
     if not (raided and side == "short"):

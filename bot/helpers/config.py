@@ -2,9 +2,13 @@
 #  Configuration
 # ────────────────────────────────────────────────────────────────
 from typing import List
+import asyncio
+from collections import defaultdict
 
-
-PAIR = "AAVEUSDT"  # Bybit symbol: SOL/ATOM/WAVES/XRP
+# Global drop stats shared between engine and commands
+GLOBAL_DROP_STATS = defaultdict(lambda: defaultdict(int))
+GLOBAL_DROP_STATS_LOCK = asyncio.Lock()
+PAIR = "RENDERUSDT"  # Bybit symbol: SOL/ATOM/WAVES/XRP
 TF_SECONDS = 15 * 60  # 15‑minute bars
 INTERVAL = "15"  # stream interval, string
 LOOKBACK_BARS = 800  # kept in memory (≈ 8 days)
@@ -102,7 +106,7 @@ PAIRS_LRS: List[str] = [
     # INTEROP
     "ATOMUSDT",
     "DOTUSDT",
-    "INJUSDT",
+   # "INJUSDT",
     # "L1",
     "SOLUSDT",
     "ADAUSDT",
@@ -111,17 +115,17 @@ PAIRS_LRS: List[str] = [
     "NEARUSDT",
     "SUIUSDT",
     # L2
-    "OPUSDT",
+   # "OPUSDT",
     "ARBUSDT",
     # MEME
     "DOGEUSDT",
     # DEFI
     "AAVEUSDT",
-    "UNIUSDT",
-    "LDOUSDT",
+   #   "UNIUSDT",
+  #   "LDOUSDT",
     # STORAGE
-    "FILUSDT",
-    "ARUSDT",
+    #  "FILUSDT",
+    #  "ARUSDT",
     # PAYMENTS
     "XRPUSDT",
     # ORACLE
@@ -138,16 +142,16 @@ CLUSTER = {
     "APTUSDT": "L1",
     "SUIUSDT": "L1",
     "ARBUSDT": "L2",
-    "OPUSDT": "L2",
+ #   "OPUSDT": "L2",
     "DOTUSDT": "INTEROP",
     "ATOMUSDT": "INTEROP",
-    "INJUSDT": "INTEROP",
-    "FILUSDT": "STORAGE",
+#    "INJUSDT": "INTEROP",
+#    "FILUSDT": "STORAGE",
     "XRPUSDT": "PAYMENTS",
     "LINKUSDT": "ORACLE",
-    "UNIUSDT": "DEFI",
+  #  "UNIUSDT": "DEFI",
     "AAVEUSDT": "DEFI",
-    "LDOUSDT": "DEFI",
+ #   "LDOUSDT": "DEFI",
     "RENDERUSDT": "AI",
     "DOGEUSDT": "MEME",
 }

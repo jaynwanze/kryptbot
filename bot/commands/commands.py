@@ -1,3 +1,4 @@
+from collections import defaultdict
 import os, asyncio
 from functools import partial
 import ccxt
@@ -7,11 +8,49 @@ from decimal import Decimal
 import pandas as pd
 from telegram import ParseMode
 from bot.engines.risk_router import RiskRouter
+from bot.analysis.forecast import generate_forecast
+from bot.helpers import config
 
 ALLOWED_CHAT_ID = int(os.getenv("TG_CHAT_ID", "0"))  # your channel id
 ALLOWED_USER_IDS = {
     int(x) for x in os.getenv("TG_ALLOW_USER_IDS", "").split(",") if x.strip().isdigit()
 }
+
+async def forecast_cmd_async(router, update, context):
+    """Async forecast command."""
+    if not _authorized(update):
+        return update.effective_message.reply_text("Sorry, not allowed.")
+    
+    # Send "thinking" message
+    thinking_msg = update.effective_message.reply_text("🤖 Analyzing market conditions...")
+    
+    try:
+        # Get config
+        from bot.helpers import config
+        pairs = getattr(config, "PAIRS_LRS", [])
+        
+        # Get aggregated drop stats
+        async with config.GLOBAL_DROP_STATS_LOCK:
+            # Sum across all pairs
+            totals = defaultdict(int)
+            for pair_stats in config.GLOBAL_DROP_STATS.values():
+                for key, val in pair_stats.items():
+                    totals[key] += val
+        
+        # Generate forecast
+        forecast = await generate_forecast(router, pairs, totals)
+        
+        # Delete thinking message and send forecast
+        thinking_msg.delete()
+        return update.effective_message.reply_text(
+            forecast,
+            parse_mode=ParseMode.MARKDOWN
+        )
+        
+    except Exception as e:
+        logging.error(f"Forecast command failed: {e}")
+        thinking_msg.delete()
+        return update.effective_message.reply_text(f"⚠️ Forecast failed: {str(e)}")
 
 async def fetch_executions(http, since_ms: int, until_ms: int):
     params = {
@@ -181,10 +220,35 @@ def _run(router, coro):
 
 
 # ── commands ───────────────────────────────────────────────────────────────
+def forecast_cmd(router, update, context):
+    """Wrapper to run async forecast command."""
+    if not _authorized(update):
+        return update.effective_message.reply_text("Sorry, not allowed.")
+    
+    logging.info("[%s] Forecast requested", update.effective_user.id)
+    
+    # Run async command in router's event loop
+    fut = asyncio.run_coroutine_threadsafe(
+        forecast_cmd_async(router, update, context),
+        router.loop
+    )
+    try:
+        return fut.result(timeout=30)  # 30 sec timeout for OpenAI API
+    except Exception as e:
+        logging.error(f"Forecast command error: {e}")
+        return update.effective_message.reply_text("⚠️ Forecast timed out or failed.")
+    
 def ping_cmd(update, context):
     logging.info("[%s] Ping command received", update.effective_user.id)
     return update.effective_message.reply_text("pong ✅")
 
+def dropstats_cmd(router, update, context):
+    if not _authorized(update):
+        return update.effective_message.reply_text("Sorry, not allowed.")
+    
+    txt = _run(router, router.format_drop_stats()) or "No stats available."
+    logging.info("[%s] Drop stats requested", update.effective_user.id)
+    return update.effective_message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
 
 def summary_cmd(router, update, context):
     if not _authorized(update):
@@ -294,13 +358,16 @@ def run_command_bot(router:RiskRouter):
     updater = Updater(os.environ["TELE_TOKEN"], use_context=True)
     dp = updater.dispatcher
 
+    # Basic commands
     dp.add_handler(CommandHandler("ping", ping_cmd))
     dp.add_handler(CommandHandler("summary", partial(summary_cmd, router)))
     dp.add_handler(CommandHandler("open", partial(open_cmd, router)))
     dp.add_handler(CommandHandler("fees", partial(fees_cmd, router)))
-  # Register trades command with multiple variants
+    dp.add_handler(CommandHandler("dropstats", partial(dropstats_cmd, router)))
+   # Advanced commands
     trades_commands = ["trades", "trades_7d", "trades_30d", "trades_60d", "trades_90d", "trades_180d", "trades_365d"]
     dp.add_handler(CommandHandler(trades_commands, partial(trades_cmd, router)))
+    dp.add_handler(CommandHandler("forecast", partial(forecast_cmd, router)))
 
     updater.start_polling(
         allowed_updates=["message", "channel_post"],
