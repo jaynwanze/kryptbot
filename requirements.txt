@@ -18,3 +18,6 @@ pybit==5.*
 fastapi 
 uvicorn
 pydantic-settings
+
+# ai
+openai>=1.50.0
