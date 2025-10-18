@@ -8,7 +8,7 @@ from collections import defaultdict
 # Global drop stats shared between engine and commands
 GLOBAL_DROP_STATS = defaultdict(lambda: defaultdict(int))
 GLOBAL_DROP_STATS_LOCK = asyncio.Lock()
-PAIR = "RENDERUSDT"  # Bybit symbol: SOL/ATOM/WAVES/XRP
+PAIR = "SOLUSDT"  # Bybit symbol: SOL/ATOM/WAVES/XRP
 TF_SECONDS = 15 * 60  # 15‑minute bars
 INTERVAL = "15"  # stream interval, string
 LOOKBACK_BARS = 800  # kept in memory (≈ 8 days)
@@ -142,17 +142,18 @@ CLUSTER = {
     "APTUSDT": "L1",
     "SUIUSDT": "L1",
     "ARBUSDT": "L2",
- #   "OPUSDT": "L2",
     "DOTUSDT": "INTEROP",
     "ATOMUSDT": "INTEROP",
-#    "INJUSDT": "INTEROP",
-#    "FILUSDT": "STORAGE",
     "XRPUSDT": "PAYMENTS",
     "LINKUSDT": "ORACLE",
-  #  "UNIUSDT": "DEFI",
     "AAVEUSDT": "DEFI",
- #   "LDOUSDT": "DEFI",
     "RENDERUSDT": "AI",
+ #   "OPUSDT": "L2",
+#    "INJUSDT": "INTEROP",
+#    "FILUSDT": "STORAGE",
+
+  #  "UNIUSDT": "DEFI",
+ #   "LDOUSDT": "DEFI",
     "DOGEUSDT": "MEME",
 }
 

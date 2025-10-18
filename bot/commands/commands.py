@@ -51,6 +51,26 @@ async def forecast_cmd_async(router, update, context):
         logging.error(f"Forecast command failed: {e}")
         thinking_msg.delete()
         return update.effective_message.reply_text(f"⚠️ Forecast failed: {str(e)}")
+    
+async def format_recent_trades_detail(router, hours=24):
+    """Show last N trades with details"""
+    recent = list(router.closed_trades)[-10:]
+    if not recent:
+        return "No recent trades."
+    
+    lines = ["📊 *Recent Trades (Last 10):*\n"]
+    for t in recent:
+        symbol = t['symbol']
+        side = t['side'].upper()
+        net = t['net']
+        emoji = "✅" if net > 0 else "❌"
+        
+        lines.append(
+            f"{emoji} `{symbol}` {side}: "
+            f"`${net:+.2f}` (fees: ${t['fees']:.2f})"
+        )
+    
+    return "\n".join(lines)
 
 async def fetch_executions(http, since_ms: int, until_ms: int):
     params = {
@@ -289,6 +309,13 @@ def fees_cmd(router, update, context):
     logging.info("[%s] Recent fees requested: %s", update.effective_user.id, minutes)
     return update.effective_message.reply_text(txt)
 
+def trades_detail_cmd(router, update, context):
+    if not _authorized(update):
+        return update.effective_message.reply_text("Sorry, not allowed.")
+    
+    txt = _run(router, format_recent_trades_detail(router)) or "No trades."
+    return update.effective_message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
+
 def trades_cmd(router, update, context):
     if not _authorized(update):
         return update.effective_message.reply_text("Sorry, not allowed.")
@@ -364,6 +391,8 @@ def run_command_bot(router:RiskRouter):
     dp.add_handler(CommandHandler("open", partial(open_cmd, router)))
     dp.add_handler(CommandHandler("fees", partial(fees_cmd, router)))
     dp.add_handler(CommandHandler("dropstats", partial(dropstats_cmd, router)))
+    dp.add_handler(CommandHandler("trades_detail", partial(trades_detail_cmd, router)))
+
    # Advanced commands
     trades_commands = ["trades", "trades_7d", "trades_30d", "trades_60d", "trades_90d", "trades_180d", "trades_365d"]
     dp.add_handler(CommandHandler(trades_commands, partial(trades_cmd, router)))

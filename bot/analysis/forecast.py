@@ -5,6 +5,8 @@ from datetime import datetime, timedelta
 from openai import AsyncClient
 import logging
 
+from bot.engines.lrs_pair_engine import REST
+
 client = AsyncClient(api_key=os.getenv("OPENAI_API_KEY"))
 
 async def generate_forecast(router, pairs: list, drop_stats: dict) -> str:
@@ -23,11 +25,17 @@ async def generate_forecast(router, pairs: list, drop_stats: dict) -> str:
 ## Active Pairs ({len(pairs)} pairs)
 {', '.join(pairs)}... (showing all pairs)
 
+## Current Market Prices
+{context['prices']}
+
 ## Recent Performance
 {context['recent_trades']}
 
 ## Current Positions
 {context['open_positions']}
+
+## Key Levels (from HTF analysis)
+{context['htf_levels']}
 
 ## Signal Rejection Stats (Last Hour)
 {context['drop_stats_summary']}
@@ -103,14 +111,37 @@ async def _build_context(router, pairs, drop_stats):
         )
     else:
         open_summary = "No open positions"
+        
+        
+    htf_levels_summary = ""
+    try:
+        # Get latest HTF levels from one of the pairs
+        htf_levels_summary = "TODO: HTF levels data not implemented yet."
+    except:
+        pass
     
     # Drop stats summary
     total_ltf = drop_stats.get("no_ltf_long", 0) + drop_stats.get("no_ltf_short", 0)
     total_adx = drop_stats.get("veto_adx", 0)
     drop_summary = f"LTF rejections: {total_ltf}, ADX rejections: {total_adx}"
+    prices_summary = await _get_current_prices(pairs)
     
     return {
         "recent_trades": recent_summary,
         "open_positions": open_summary,
         "drop_stats_summary": drop_summary,
+        "prices": prices_summary,
+        "htf_levels": htf_levels_summary,  # ADD THIS
     }
+    
+async def _get_current_prices(pairs):
+    """Fetch live prices for context"""
+    prices = {}
+    # Use your existing CCXT or Bybit client
+    for pair in pairs[:5]:  # Top 5 only
+        try:
+            ticker = await REST.fetch_ticker(pair)
+            prices[pair] = ticker['last']
+        except:
+            pass
+    return prices
