@@ -37,6 +37,7 @@ from bot.helpers import (
 from bot.data import preload_history
 from bot.commands import run_command_bot
 from collections import deque, defaultdict
+from bot.infra.bybit_client import REST
 
 # ────────────────────────────────────────────────────────────────
 #  Global constants
@@ -64,14 +65,6 @@ SESSION_GATING = len(GOOD_HOURS) < 24  # only enforce if not 24/7
 # ────────────────────────────────────────────────────────────────
 WS_URL = "wss://stream.bybit.com/v5/public/linear"
 PING_SEC = 20
-REST = ccxt.bybit(
-    {
-        "enableRateLimit": True,
-        "apiKey": os.getenv("BYBIT_API_KEY"),
-        "secret": os.getenv("BYBIT_API_SECRET"),
-        "options": {"defaultType": "swap"},
-    }
-)
 TF = config.INTERVAL  # "15"
 TF_SEC = int(TF) * 60
 LOOKBACK = 1_000

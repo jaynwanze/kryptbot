@@ -4,8 +4,7 @@ import asyncio
 from datetime import datetime, timedelta
 from openai import AsyncClient
 import logging
-
-from bot.engines.lrs_pair_engine import REST
+from bot.infra.bybit_client import REST
 
 client = AsyncClient(api_key=os.getenv("OPENAI_API_KEY"))
 
