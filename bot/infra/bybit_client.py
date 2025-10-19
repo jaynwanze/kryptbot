@@ -2,6 +2,7 @@
 from pybit.unified_trading import HTTP, WebSocket
 import os, time, hmac, hashlib
 import logging
+import ccxt.async_support as ccxt
 
 def get_client(testnet: bool = True) -> HTTP:
     key = (os.getenv("BYBIT_KEY_TEST" if testnet else "BYBIT_KEY") or "").strip()
@@ -20,3 +21,12 @@ def get_private_ws(testnet: bool = True) -> WebSocket:
         api_secret=sec,
         ping_interval=20,
     )
+
+REST = ccxt.bybit(
+    {
+        "enableRateLimit": True,
+        "apiKey": os.getenv("BYBIT_API_KEY"),
+        "secret": os.getenv("BYBIT_API_SECRET"),
+        "options": {"defaultType": "swap"},
+    }
+)
