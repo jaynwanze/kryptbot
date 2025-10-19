@@ -714,6 +714,15 @@ async def main():
 
 if __name__ == "__main__":
     logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s – %(levelname)s – %(message)s"
+        level=logging.INFO, 
+        format="%(asctime)s – %(levelname)s – %(message)s"
     )
+    
+    # Silence noisy third-party library loggers
+    logging.getLogger("websockets").setLevel(logging.WARNING)
+    logging.getLogger("websockets.client").setLevel(logging.WARNING)
+    logging.getLogger("ccxt").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("telegram").setLevel(logging.WARNING)
+    
     asyncio.run(main())
