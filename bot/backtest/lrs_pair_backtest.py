@@ -52,13 +52,13 @@ def backtest(df: pd.DataFrame,
     # Warm-up guard
     required_warmup_days = getattr(config, "HTF_DAYS", 15) + 5  # +5 for safety
     warmup_bars = required_warmup_days * 96  # 96 bars/day for 15m
-    
+
     if len(df) < warmup_bars:
         logging.warning(
             "Insufficient history! Have %d bars, need %d for HTF warmup",
             len(df), warmup_bars
         )
-        
+
     # 1) Compute indicators
     df = compute_indicators(df.copy())
 
@@ -108,7 +108,6 @@ def backtest(df: pd.DataFrame,
 
       # Then iterate only over the TEST period (e.g., last 30 days)
     test_start_idx = max(0, len(df) - 30*96)  # last 30 days
-    
     for i in range(test_start_idx, len(df)):
         bar = df.iloc[i]
         drop_stats["total_bars"] += 1
@@ -187,7 +186,7 @@ def backtest(df: pd.DataFrame,
                 continue
 
             # 1) HTF proximity gate
-            max_atr_mom = getattr(config, "NEAR_HTF_MAX_ATR_MOM", 0.7)
+            max_atr_mom = getattr(config, "NEAR_HTF_MAX_ATR_MOM_BACKTEST", 2.0)
             if not near_htf_level(bar, htf_row, max_atr=max_atr_mom):
                 drop_stats["not_near_htf"] += 1
                 htf_levels = update_htf_levels_new(htf_levels, bar)
@@ -227,7 +226,7 @@ def backtest(df: pd.DataFrame,
                 h1 = update_h1(h1, bar.name, float(bar.c))
                 curve.append(equity)
                 continue
-            
+
             # 5) Cooldown checks (same as live)
             bar_ts = bar.name.timestamp()
             if last_sl_ts and (bar_ts - last_sl_ts) < cooldown_sl_sec:
@@ -413,7 +412,6 @@ if __name__ == "__main__":
     bars_needed = days_back * 96  # 96 bars per day for 15m
     now = datetime.now(timezone.utc)
     target_start = now - pd.Timedelta(days=days_back)
-    
     logging.info("Loading %d bars (back to %s)", bars_needed, target_start.date())
 
     # Load 30 days of data (30 days × 96 bars/day = 2880 bars for 15m)

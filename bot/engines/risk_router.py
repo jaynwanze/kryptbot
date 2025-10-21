@@ -16,7 +16,6 @@ import csv
 
 
 # Config & logging
-TRAIL_ENABLE = getattr(config, "TRAIL_ENABLE", True)
 BE_ARM_R = getattr(config, "BE_ARM_R", 0.8)  # move stop to BE after +0.8R
 ATR_TRAIL_K = getattr(config, "ATR_TRAIL_K", 0.9)  # trail distance = k * ATR
 REMOVE_TP_WHEN_TRAIL = getattr(
@@ -1259,7 +1258,8 @@ class RiskRouter:
             self.scalp_time_stops.pop(symbol, None)
             return
 
-        if not getattr(config, "TRAIL_ENABLE", True):
+        # ATR trailing
+        if not getattr(config, "TRAIL_ENABLE", False):
             return
 
         entry = float(self._entry_price.get(symbol, float(pos.signal.entry)))
@@ -1358,25 +1358,25 @@ class RiskRouter:
 
         except Exception as e:
             logging.warning("[%s] close_market failed: %s", symbol, e)
-            
+
 
     async def format_drop_stats(self) -> str:
         """Format aggregated drop stats across all pairs."""
-        
+
         async with config.GLOBAL_DROP_STATS_LOCK:
             if not config.GLOBAL_DROP_STATS:
                 return "No drop stats available yet. Stats are collected hourly."
-            
+
             # Aggregate across all pairs
             totals = defaultdict(int)
             for pair_stats in config.GLOBAL_DROP_STATS.values():
                 for key, val in pair_stats.items():
                     totals[key] += val
-            
+
             total_bars = sum(totals.values()) or 1
-            
+
             lines = ["📊 *DROP STATS (Aggregated)*\n"]
-            
+
             # Top rejections
             rejection_items = [
                 ("🚫 HTF Not Near", totals.get("not_near_htf", 0)),
@@ -1389,13 +1389,13 @@ class RiskRouter:
                 ("🧊 Cooldown TP", totals.get("cooldown_tp", 0)),
                 ("🎯 Daily Cap", totals.get("daily_cap", 0)),
             ]
-            
+
             lines.append("*Top Rejection Reasons:*")
             for label, count in sorted(rejection_items, key=lambda x: x[1], reverse=True):
                 if count > 0:
                     pct = (count / total_bars) * 100
                     lines.append(f"{label}: `{count}` ({pct:.1f}%)")
-            
+
             # Per-pair breakdown (top 5 most active)
             lines.append("\n*Per-Pair Breakdown (Top 5):*")
             pair_totals = {
@@ -1408,5 +1408,5 @@ class RiskRouter:
                 ltf_rej = stats.get("no_ltf_long", 0) + stats.get("no_ltf_short", 0)
                 adx_rej = stats.get("veto_adx", 0)
                 lines.append(f"`{pair}`: LTF={ltf_rej} ADX={adx_rej}")
-            
+
             return "\n".join(lines)

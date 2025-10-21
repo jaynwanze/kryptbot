@@ -12,6 +12,7 @@ PAIR = "SOLUSDT"  # Bybit symbol: SOL/ATOM/WAVES/XRP
 TF_SECONDS = 15 * 60  # 15‑minute bars
 INTERVAL = "15"  # stream interval, string
 LOOKBACK_BARS = 800  # kept in memory (≈ 8 days)
+TRAIL_ENABLE = False
 
 # Strategy param
 # portfolio guards
@@ -32,6 +33,7 @@ WICK_BUFFER = (
 # Core filters - STRICT
 ADX_HARD_FLOOR = 28              # Higher floor for quality
 NEAR_HTF_MAX_ATR_MOM = 0.9       # Must be close to HTF levels
+NEAR_HTF_MAX_ATR_MOM_BACKTEST = 1.5  # Wider for backtests to match lives
 MOMENTUM_STO_K_LONG = 35         # Tighter oversold
 MOMENTUM_STO_K_SHORT = 65        # Tighter overbought
 MIN_H1_SLOPE = 0.05              # Moderate slope requirement
