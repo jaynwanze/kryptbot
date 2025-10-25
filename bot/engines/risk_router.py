@@ -7,8 +7,9 @@ import logging
 import math
 from collections import deque, defaultdict
 from typing import Dict, Optional, Tuple
+from bot.helpers.config import config
 from bot.infra import Signal, Position, get_client, get_private_ws
-from bot.helpers import config, telegram
+from bot.helpers import telegram
 import ccxt.async_support as ccxt
 from datetime import datetime
 from pathlib import Path, PurePath

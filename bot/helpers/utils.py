@@ -1,5 +1,5 @@
 import math
-from bot.helpers import config
+from bot.helpers.config import config
 import pandas as pd
 import csv
 

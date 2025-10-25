@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from bot.helpers import config
+from bot.helpers.config import config
 
 # --- Break of structure -----------------
 def is_bos(df: pd.DataFrame, idx: int, direction: str,

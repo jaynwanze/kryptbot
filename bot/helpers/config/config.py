@@ -8,7 +8,7 @@ from collections import defaultdict
 # Global drop stats shared between engine and commands
 GLOBAL_DROP_STATS = defaultdict(lambda: defaultdict(int))
 GLOBAL_DROP_STATS_LOCK = asyncio.Lock()
-PAIR = "SOLUSDT"  # Bybit symbol: SOL/ATOM/WAVES/XRP
+PAIR = "AAVEUSDT"  # Bybit symbol: SOL/ATOM/WAVES/XRP
 TF_SECONDS = 15 * 60  # 15‑minute bars
 INTERVAL = "15"  # stream interval, string
 LOOKBACK_BARS = 800  # kept in memory (≈ 8 days)
@@ -24,20 +24,36 @@ MAX_TOTAL_RISK_PCT = 0.30  # e.g., 30% of equity at risk across all opens
 RISK_PCT = 0.1  # not used (alerts only)
 STAKE_SIZE_USD = 1_000  # ‘cash you allocate’ per entry
 LEVERAGE = 20
-RR_TARGET = 1.5
-ATR_MULT_SL = 1.0
-SL_CUSHION_MULT = 1.3  # was a hidden “1.6”; make it explicit & multiplicative
+# In your config.py, change:
+RR_TARGET = 2.5          # Up from 1.5 (much wider targets)
+ATR_MULT_SL = 0.8        # Down from 1.0 (tighter stops)
+SL_CUSHION_MULT = 1.1    # Down from 1.3 (less cushion)
 WICK_BUFFER = (
     0.25  # in ATR units              # extra cushion for SL (to avoid false hits)
 )
-# Core filters - STRICT
-ADX_HARD_FLOOR = 28              # Higher floor for quality
-NEAR_HTF_MAX_ATR_MOM = 0.9       # Must be close to HTF levels
-NEAR_HTF_MAX_ATR_MOM_BACKTEST = 1.5  # Wider for backtests to match lives
-MOMENTUM_STO_K_LONG = 35         # Tighter oversold
-MOMENTUM_STO_K_SHORT = 65        # Tighter overbought
-MIN_H1_SLOPE = 0.05              # Moderate slope requirement
+# Config A: Balanced
+ADX_HARD_FLOOR = 25  # Down from 28-35
+NEAR_HTF_MAX_ATR_MOM = 0.7
+MOMENTUM_STO_K_SHORT = 75
+MOMENTUM_STO_K_LONG = 25
+MIN_H1_SLOPE = 0.08
+MIN_VOL_RATIO = 1.1
 
+# # Config B: Tight
+# ADX_HARD_FLOOR = 32
+# NEAR_HTF_MAX_ATR_MOM = 0.6
+# MOMENTUM_STO_K_SHORT = 78
+# MOMENTUM_STO_K_LONG = 22
+# MIN_H1_SLOPE = 0.09
+# MIN_VOL_RATIO = 1.15
+
+# # Config C: Strict
+# ADX_HARD_FLOOR = 35
+# NEAR_HTF_MAX_ATR_MOM = 0.5
+# MOMENTUM_STO_K_SHORT = 80
+# MOMENTUM_STO_K_LONG = 20
+# MIN_H1_SLOPE = 0.10
+# MIN_VOL_RATIO = 1.2
 # Cooldowns
 COOLDOWN_DAYS_AFTER_SL = 0.5    # 12 hours
 COOLDOWN_DAYS_AFTER_TP = 0.25   # 6 hours
@@ -98,6 +114,7 @@ TICK_SIZE = {  # expand as needed
     "WOOUSDT": 0.00001,
     "SUIUSDT": 0.0001,
     "SEIUSDT": 0.00001,
+    'BTCUSDT': 0.1,
 }
 # ────────────────────────────────────────────────────────────────
 #  Pairs & history

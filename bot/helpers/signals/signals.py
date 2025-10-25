@@ -1,6 +1,6 @@
 from typing import Optional, Tuple
 from bot.helpers import config
-from bot.helpers import ltf
+from bot.helpers.timeframe import ltf
 import pandas as pd
 import logging
 
