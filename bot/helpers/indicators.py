@@ -5,8 +5,10 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     # EMAs
     df["ema7"]  = df.c.ewm(span=7,  adjust=False).mean()
     df["ema14"] = df.c.ewm(span=14, adjust=False).mean()
+    df["ema21"] = df.c.ewm(span=21, adjust=False).mean()
     df["ema28"] = df.c.ewm(span=28, adjust=False).mean()
     df["ema50"] = df.c.ewm(span=50, adjust=False).mean()
+    df["ema200"] = df.c.ewm(span=200, adjust=False).mean()  # TREND FILTER
 
     # ATR
     tr = np.maximum.reduce([
