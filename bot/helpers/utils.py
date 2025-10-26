@@ -1,9 +1,8 @@
 import math
-from bot.helpers.config import config
 import pandas as pd
 import csv
 
-def round_price(price: float, pair: str) -> float:
+def round_price(price: float, pair: str, config) -> float:
     """Round price to the nearest tick size for the given trading pair."""
     tick = config.TICK_SIZE.get(pair)
     if tick is None:

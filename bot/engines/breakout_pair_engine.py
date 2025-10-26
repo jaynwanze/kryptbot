@@ -675,6 +675,7 @@ if __name__ == "__main__":
     # Silence noisy loggers
     logging.getLogger("websockets").setLevel(logging.WARNING)
     logging.getLogger("websockets.client").setLevel(logging.WARNING)
+    logging.getLogger("websocket").setLevel(logging.WARNING)  # ← Fixes ping spam
     logging.getLogger("ccxt").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("telegram").setLevel(logging.WARNING)

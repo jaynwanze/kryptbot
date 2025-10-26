@@ -31,7 +31,8 @@ LOOKBACK_BARS = 800
 # ═══════════════════════════════════════════════════════════════════════════
 PAIRS_LRS: List[str] = [
     "ETHUSDT",   # 53.3% WR, 2.61 PF, +$3,600 (EXCELLENT)
-    # "",   # 38.5% WR, 1.45 PF, +$2,273 (SOLID)
+    'DOTUSDT',  
+    'ADAUSDT',  
 ]
 
 # Portfolio guards
@@ -100,6 +101,11 @@ TICK_SIZE = {
     "ATOMUSDT": 0.001,
     "LINKUSDT": 0.001,
     "BTCUSDT": 0.1,
+    "BNBUSDT": 0.01,
+    'ADAUSDT': 0.001,
+    'AVAXUSDT': 0.01,
+    'DOTUSDT': 0.001,
+    'NEARUSDT': 0.0001,
 }
 
 # Clusters (for position management)
