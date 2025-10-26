@@ -6,7 +6,7 @@ from telegram.ext import Updater, CommandHandler
 import logging
 from decimal import Decimal
 import pandas as pd
-from telegram.constants import ParseMode
+from telegram import ParseMode
 from bot.engines.risk_router import RiskRouter
 from bot.analysis.forecast import generate_forecast
 
