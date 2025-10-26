@@ -31,9 +31,7 @@ LOOKBACK_BARS = 800
 # ═══════════════════════════════════════════════════════════════════════════
 PAIRS_LRS: List[str] = [
     "ETHUSDT",   # 53.3% WR, 2.61 PF, +$3,600 (EXCELLENT)
-    'DOTUSDT',  
-    'ADAUSDT',  
-]
+    'DOTUSDT',  ]
 
 # Portfolio guards
 MAX_TRADES_PER_DAY = 3
