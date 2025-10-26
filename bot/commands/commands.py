@@ -6,17 +6,16 @@ from telegram.ext import Updater, CommandHandler
 import logging
 from decimal import Decimal
 import pandas as pd
-from telegram import ParseMode
+from telegram.constants import ParseMode
 from bot.engines.risk_router import RiskRouter
 from bot.analysis.forecast import generate_forecast
-from bot.helpers import config
 
 ALLOWED_CHAT_ID = int(os.getenv("TG_CHAT_ID", "0"))  # your channel id
 ALLOWED_USER_IDS = {
     int(x) for x in os.getenv("TG_ALLOW_USER_IDS", "").split(",") if x.strip().isdigit()
 }
 
-async def forecast_cmd_async(router, update, context):
+async def forecast_cmd_async(config, router, update, context):
     """Async forecast command."""
     if not _authorized(update):
         return update.effective_message.reply_text("Sorry, not allowed.")
@@ -25,8 +24,6 @@ async def forecast_cmd_async(router, update, context):
     thinking_msg = update.effective_message.reply_text("🤖 Analyzing market conditions...")
     
     try:
-        # Get config
-        from bot.helpers import config
         pairs = getattr(config, "PAIRS_LRS", [])
         
         # Get aggregated drop stats
@@ -240,7 +237,7 @@ def _run(router, coro):
 
 
 # ── commands ───────────────────────────────────────────────────────────────
-def forecast_cmd(router, update, context):
+def forecast_cmd(config, router, update, context):
     """Wrapper to run async forecast command."""
     if not _authorized(update):
         return update.effective_message.reply_text("Sorry, not allowed.")
@@ -249,7 +246,7 @@ def forecast_cmd(router, update, context):
     
     # Run async command in router's event loop
     fut = asyncio.run_coroutine_threadsafe(
-        forecast_cmd_async(router, update, context),
+        forecast_cmd_async(config, router, update, context),
         router.loop
     )
     try:
@@ -379,7 +376,7 @@ def trades_cmd(router, update, context):
 
 
 
-def run_command_bot(router:RiskRouter):
+def run_command_bot(router:RiskRouter, config):
     """Start PTB13 polling;(we're inside your engine)."""
     # no updater.idle() here
     updater = Updater(os.environ["TELE_TOKEN"], use_context=True)
@@ -396,7 +393,7 @@ def run_command_bot(router:RiskRouter):
    # Advanced commands
     trades_commands = ["trades", "trades_7d", "trades_30d", "trades_60d", "trades_90d", "trades_180d", "trades_365d"]
     dp.add_handler(CommandHandler(trades_commands, partial(trades_cmd, router)))
-    dp.add_handler(CommandHandler("forecast", partial(forecast_cmd, router)))
+    dp.add_handler(CommandHandler("forecast", partial(forecast_cmd, config, router)))
 
     updater.start_polling(
         allowed_updates=["message", "channel_post"],

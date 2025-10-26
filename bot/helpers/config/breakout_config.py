@@ -1,12 +1,14 @@
-# bot/helpers/config_breakout.py
+# bot/helpers/config/breakout_config.py
 """
-BREAKOUT STRATEGY CONFIG
+BREAKOUT STRATEGY CONFIG - OPTIMIZED FOR ETH + SOL
 
-Key differences from mean-reversion:
+Based on 100-day backtest results:
+- ETHUSDT: 53.3% WR, 2.61 PF, +$3,600 (45 trades)
+- SOLUSDT: 38.5% WR, 1.45 PF, +$2,273 (78 trades)
 - Higher ADX floor (we want strong trends)
 - Stoch checks flipped (don't buy overbought, don't sell oversold)
 - Wider R:R (breakouts can run further)
-- Removed HTF proximity filter (we break levels, not fade them)
+- Trade on 1H timeframe (not 15m)
 """
 
 from typing import List
@@ -17,62 +19,70 @@ from collections import defaultdict
 GLOBAL_DROP_STATS = defaultdict(lambda: defaultdict(int))
 GLOBAL_DROP_STATS_LOCK = asyncio.Lock()
 
-# Basic settings
-PAIR = "BTCUSDT"  # Bybit symbol: SOL/ATOM/WAVES/XRP
-TF_SECONDS = 60 * 60  # 1‑minute bars
-INTERVAL = "60"  # stream interval, string
+# ═══════════════════════════════════════════════════════════════════════════
+# CRITICAL: TIMEFRAME SETTINGS
+# ═══════════════════════════════════════════════════════════════════════════
+TF_SECONDS = 60 * 60  # 1-HOUR bars (not 15m!)
+INTERVAL = "60"  # "60" for 1H
 LOOKBACK_BARS = 800
-TRAIL_ENABLE = True  # More important for breakouts
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PAIRS - OPTIMIZED (Only proven winners)
+# ═══════════════════════════════════════════════════════════════════════════
+PAIRS_LRS: List[str] = [
+    "ETHUSDT",   # 53.3% WR, 2.61 PF, +$3,600 (EXCELLENT)
+    # "",   # 38.5% WR, 1.45 PF, +$2,273 (SOLID)
+]
 
 # Portfolio guards
 MAX_TRADES_PER_DAY = 3
-MAX_SIGNAL_AGE_SEC = 30
-COALESCE_SEC = 2
+MAX_SIGNAL_AGE_SEC = 60  # Longer for 1H (was 30 for 15m)
+COALESCE_SEC = 5
 MAX_PER_SIDE_OPEN = 1
 MAX_TOTAL_RISK_PCT = 0.30
-MAX_OPEN_CONCURRENT = 3
+MAX_OPEN_CONCURRENT = 2  # Max 2 since we only have 2 pairs
 
 # Position sizing
-RISK_PCT = 0.1
+RISK_PCT = 0.1  # 10% risk per trade
 STAKE_SIZE_USD = 1_000
 LEVERAGE = 20
 
 # ═══════════════════════════════════════════════════════════════════════════
-# BREAKOUT STRATEGY PARAMETERS
+# BREAKOUT STRATEGY PARAMETERS (from backtest)
 # ═══════════════════════════════════════════════════════════════════════════
 
-# Risk/Reward (breakouts can run further)
-RR_TARGET = 2.5  # Up from 1.5 - let winners run
-MIN_ATR_RATIO = 1.1  # High volatility only
-SL_CUSHION_MULT = 1.2  # Less cushion needed
-WICK_BUFFER = 0.2
+# Risk/Reward
+RR_TARGET = 1.5  # Standard for breakouts
+MIN_ATR_RATIO = 1.0
+SL_CUSHION_MULT = 1.3  # From backtest
+WICK_BUFFER = 0.25
 
-# Trend strength (breakouts need strong trends)
-ADX_HARD_FLOOR = 50  # Higher than mean-reversion's 25
-MIN_H1_SLOPE = 0.08  # Need clear directional bias
+# Trend strength (breakouts need strong momentum)
+ADX_HARD_FLOOR = 50  # High ADX for clean breakouts
+MIN_H1_SLOPE = 0.08  # Need directional bias
 
 # Momentum filters (FLIPPED from mean-reversion)
-# For LONGS: Don't buy if already too overbought
-MOMENTUM_STO_K_LONG_MAX = 90  # Max k_slow for long entries
+# For LONGS: Don't buy if already overbought
+MOMENTUM_STO_K_LONG_MAX = 70  # k_slow must be < 70 for longs
 
-# For SHORTS: Don't sell if already too oversold  
-MOMENTUM_STO_K_SHORT_MIN = 10  # Min k_slow for short entries
+# For SHORTS: Don't sell if already oversold  
+MOMENTUM_STO_K_SHORT_MIN = 30  # k_slow must be > 30 for shorts
 
-# Breakout-specific
+# Breakout detection
 BREAKOUT_THRESHOLD_ATR = 0.3  # How far past level = confirmed break
 PULLBACK_PROXIMITY_ATR = 0.4  # How close to level = valid pullback
-PULLBACK_LOOKBACK_BARS = 8  # How many bars to look for pullback
+PULLBACK_LOOKBACK_BARS = 8  # Bars to search for pullback
 
-# Cooldowns (shorter for breakouts - they're faster)
-COOLDOWN_DAYS_AFTER_SL = 0.25  # 6 hours
-COOLDOWN_DAYS_AFTER_TP = 0.1   # 2.4 hours
+# Cooldowns (from backtest - matched to performance)
+COOLDOWN_DAYS_AFTER_SL = 0.5  # 12 hours (0.5 days)
+COOLDOWN_DAYS_AFTER_TP = 0.25  # 6 hours (0.25 days)
 
-# Sessions (keep all hours for breakouts)
+# Sessions - Trade 24/7 for breakouts (don't restrict by time)
 SESSION_WINDOWS = {
-    "asia": (0, 24),   # Trade 24/7 for breakouts
+    "all": (0, 24),  # 24/7 trading
 }
 
-# HTF settings
+# HTF settings (use 1H for breakout levels)
 HTF_DAYS = 15
 HTF_LEVEL_TF = "1H"
 
@@ -80,57 +90,41 @@ HTF_LEVEL_TF = "1H"
 SLIP_BPS = 0.0002
 FEE_BPS = 10
 
-# Tick sizes (same as before)
+# ═══════════════════════════════════════════════════════════════════════════
+# TICK SIZES (Exchange filters)
+# ═══════════════════════════════════════════════════════════════════════════
 TICK_SIZE = {
     "ETHUSDT": 0.01,
-    "AAVEUSDT": 0.01,
     "SOLUSDT": 0.01,
+    # Keep others for future expansion
     "ATOMUSDT": 0.001,
-    "AVAXUSDT": 0.001,
-    "RENDERUSDT": 0.001,
-    "NEARUSDT": 0.001,
-    "APTUSDT": 0.001,
     "LINKUSDT": 0.001,
-    "XRPUSDT": 0.0001,
-    "DOTUSDT": 0.0001,
-    "ARBUSDT": 0.0001,
-    "DOGEUSDT": 0.00001,
-    "ADAUSDT": 0.0001,
-    "SUIUSDT": 0.0001,
+    "BTCUSDT": 0.1,
 }
 
-# Pairs (same as before)
-PAIRS_LRS: List[str] = [
-    "ATOMUSDT",
-    "DOTUSDT",
-    "SOLUSDT",
-    "ADAUSDT",
-    "AVAXUSDT",
-    "APTUSDT",
-    "NEARUSDT",
-    "SUIUSDT",
-    "ARBUSDT",
-    "DOGEUSDT",
-    "AAVEUSDT",
-    "XRPUSDT",
-    "LINKUSDT",
-    "RENDERUSDT",
-]
-
-# Clusters (same as before)
+# Clusters (for position management)
 CLUSTER = {
-    "NEARUSDT": "L1",
-    "AVAXUSDT": "L1",
+    "ETHUSDT": "ETH",
     "SOLUSDT": "L1",
-    "ADAUSDT": "L1",
-    "APTUSDT": "L1",
-    "SUIUSDT": "L1",
-    "ARBUSDT": "L2",
-    "DOTUSDT": "INTEROP",
-    "ATOMUSDT": "INTEROP",
-    "XRPUSDT": "PAYMENTS",
-    "LINKUSDT": "ORACLE",
-    "AAVEUSDT": "DEFI",
-    "RENDERUSDT": "AI",
-    "DOGEUSDT": "MEME",
 }
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TRAILING STOP SETTINGS
+# ═══════════════════════════════════════════════════════════════════════════
+TRAIL_ENABLE = True  # Important for breakouts - let winners run
+BE_ARM_R = 0.8  # Move to BE after +0.8R profit
+ATR_TRAIL_K = 0.9  # Trail distance = 0.9 * ATR
+REMOVE_TP_WHEN_TRAIL = False  # Keep 1.5R TP even when trailing
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PROXIMITY FILTER (different from mean-reversion)
+# ═══════════════════════════════════════════════════════════════════════════
+# For breakouts, we're not as strict about HTF proximity since we're 
+# breaking levels, not fading them
+NEAR_HTF_MAX_ATR_MOM = 2.0  # Wider tolerance (mean-reversion uses 0.7)
+NEAR_HTF_MAX_ATR_MOM_BACKTEST = 2.0
+
+# ═══════════════════════════════════════════════════════════════════════════
+# LOGGING
+# ═══════════════════════════════════════════════════════════════════════════
+LOG_DIR = "./logs"

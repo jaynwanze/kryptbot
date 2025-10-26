@@ -1260,7 +1260,7 @@ class RiskRouter:
             return
 
         # ATR trailing
-        if not getattr(config, "TRAIL_ENABLE", False):
+        if not getattr(config, "TRAIL_ENABLE", True):
             return
 
         entry = float(self._entry_price.get(symbol, float(pos.signal.entry)))

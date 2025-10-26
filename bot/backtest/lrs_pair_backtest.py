@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
 import os, sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
-
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional, List, Dict
 from collections import defaultdict
-
 import asyncio
 import logging
 import pandas as pd
-
 from bot.data import preload_history
 from bot.helpers import (
-    config, compute_indicators, build_htf_levels, update_htf_levels_new,
+    config,compute_indicators, build_htf_levels, update_htf_levels_new,
     tjr_long_signal, tjr_short_signal, round_price, align_by_close,
     fees_usd, build_h1, update_h1, near_htf_level, in_good_hours, veto_thresholds
 )
@@ -264,11 +261,14 @@ def backtest(df: pd.DataFrame,
             k_short = getattr(config, "MOMENTUM_STO_K_SHORT", 70)
             min_h1_slope = getattr(config, "MIN_H1_SLOPE", 0.10)
 
-            # LONG signal
-            if (bar.k_fast <= k_long
-                and h1row.slope > min_h1_slope
-                and tjr_long_signal(df, i, htf_row, min_checks=min_checks)):
-
+                    # LONG signal
+            if (
+                    bar.adx > config.ADX_HARD_FLOOR
+                    and bar.k_slow > config.MOMENTUM_STO_K_SHORT
+                    and bar.v > bar.vol20 * config.MIN_VOL_RATIO  # NEW
+                    and h1row.slope > min_h1_slope
+                    and tjr_long_signal(df, i, htf_row, min_checks=min_checks)
+                ):
                 # Entry with execution delay (simulate market order at next bar open + slippage)
                 if i + 1 < len(df):
                     next_bar = df.iloc[i + 1]
@@ -284,19 +284,22 @@ def backtest(df: pd.DataFrame,
                 pos = Position(
                     dir=1, entry=entry, sl=sl, tp=tp, qty=qty,
                     risk=risk_usd, time_entry=bar.name,
-                    adx_entry=float(bar.adx), k_entry=float(bar.k_fast)
+                    adx_entry=float(bar.adx), k_entry=float(bar.k_slow)
                 )
                 daily_count[day_key] += 1
                 logging.info(
-                    "[%s] LONG @ %s | entry %.4f sl %.4f tp %.4f | adx %.1f k %.1f | daily %d/%d",
-                    pair, bar.name, entry, sl, tp, bar.adx, bar.k_fast,
+                    "[%s] LONG @ %s | entry %.4f sl %.4f tp %.4f | adx %.1f k_slow %.1f | daily %d/%d",
+                    pair, bar.name, entry, sl, tp, bar.adx, bar.k_slow,
                     daily_count[day_key], max_daily
                 )
 
             # SHORT signal
-            elif (bar.k_fast >= k_short
-                  and h1row.slope < -min_h1_slope
-                  and tjr_short_signal(df, i, htf_row, min_checks=min_checks)):
+         # SHORT signal
+            elif (bar.k_slow >= k_short
+                and bar.adx >= config.ADX_HARD_FLOOR  # Make sure this is checked
+                and bar.v >= bar.vol20 * config.MIN_VOL_RATIO  # NEW
+                and h1row.slope < -min_h1_slope
+                and tjr_short_signal(df, i, htf_row, min_checks=min_checks)):
 
                 if i + 1 < len(df):
                     next_bar = df.iloc[i + 1]
@@ -312,12 +315,12 @@ def backtest(df: pd.DataFrame,
                 pos = Position(
                     dir=-1, entry=entry, sl=sl, tp=tp, qty=qty,
                     risk=risk_usd, time_entry=bar.name,
-                    adx_entry=float(bar.adx), k_entry=float(bar.k_fast)
+                    adx_entry=float(bar.adx), k_entry=float(bar.k_slow)
                 )
                 daily_count[day_key] += 1
                 logging.info(
-                    "[%s] SHORT @ %s | entry %.4f sl %.4f tp %.4f | adx %.1f k %.1f | daily %d/%d",
-                    pair, bar.name, entry, sl, tp, bar.adx, bar.k_fast,
+                    "[%s] SHORT @ %s | entry %.4f sl %.4f tp %.4f | adx %.1f k_slow %.1f | daily %d/%d",
+                    pair, bar.name, entry, sl, tp, bar.adx, bar.k_slow,
                     daily_count[day_key], max_daily
                 )
             else:

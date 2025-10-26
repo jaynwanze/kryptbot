@@ -7,4 +7,5 @@ from .utils import round_price, align_by_close, next_open_price, fees_usd, veto_
 from .telegram import alert_side, bybit_alert
 from .config import config, breakout_config # ema_config
 from .signals.breakout_signals import level_broken, breakout_long_signal, breakout_short_signal
+from .regieme.regieme_filter import  precompute_regime, regime_gate_fast
 # from .signals.ema_signals import ema_long_signal, ema_short_signal
