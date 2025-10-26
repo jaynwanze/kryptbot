@@ -183,9 +183,9 @@ def backtest(df: pd.DataFrame,
             entry = float(bar.c) * 1.00002
             risk_usd = equity0 * risk_pct
             qty = risk_usd / stop_off
-            sl = round_price(entry - stop_off, pair)
-            tp = round_price(entry + tp_dist, pair)
-            
+            sl = round_price(entry - stop_off, pair, breakout_config)
+            tp = round_price(entry + tp_dist, pair, breakout_config)
+
             pos = Position(
                 dir=1, entry=entry, sl=sl, tp=tp, qty=qty,
                 time_entry=bar.name, adx_entry=float(bar.adx)
@@ -198,9 +198,9 @@ def backtest(df: pd.DataFrame,
             entry = float(bar.c) * 0.99998
             risk_usd = equity0 * risk_pct
             qty = risk_usd / stop_off
-            sl = round_price(entry + stop_off, pair)
-            tp = round_price(entry - tp_dist, pair)
-            
+            sl = round_price(entry + stop_off, pair, breakout_config)
+            tp = round_price(entry - tp_dist, pair, breakout_config)
+
             pos = Position(
                 dir=-1, entry=entry, sl=sl, tp=tp, qty=qty,
                 time_entry=bar.name, adx_entry=float(bar.adx)
@@ -247,7 +247,7 @@ def backtest(df: pd.DataFrame,
 
 
 if __name__ == "__main__":
-    pair = "ETHUSDT"
+    pair = "DOTUSDT"
     
     print("="*80)
     print("FAST BREAKOUT BACKTEST WITH REGIME FILTER")
