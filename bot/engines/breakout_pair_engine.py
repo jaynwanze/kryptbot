@@ -646,7 +646,7 @@ async def consume(router: RiskRouter):
 # ────────────────────────────────────────────────────────────────
 async def main():
     router = RiskRouter(equity_usd=20, testnet=False)
-    pairs = getattr(breakout_config, "PAIRS_LRS", ["ETHUSDT"])
+    pairs = getattr(breakout_config, "PAIRS_LRS", ["ETHUSDT", "DOTUSDT", "ADAUSDT"])
     
     logging.info("="*80)
     logging.info("BREAKOUT LIVE ENGINE - 1H Timeframe")
