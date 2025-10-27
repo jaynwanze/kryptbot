@@ -20,7 +20,7 @@ from collections import defaultdict
 GLOBAL_DROP_STATS = defaultdict(lambda: defaultdict(int))
 GLOBAL_DROP_STATS_LOCK = asyncio.Lock()
 
-PAIR = "SOLUSDT"
+PAIR = "ETHUSDT"
 TF_SECONDS = 60 * 60  # 1 hours
 INTERVAL = "60"          # 1H (60 minutes)
 LOOKBACK_BARS = 400       # ~66 days of 1H bars (enough for 200 EMA)
@@ -53,11 +53,17 @@ LEVERAGE = 20
 EMA_FAST = 21
 EMA_SLOW = 50
 EMA_TREND_FILTER = 200  # NEW: Major trend filter
-EMA_CROSSOVER_LOOKBACK = 10
+EMA_CROSSOVER_LOOKBACK = 20 # bars
 MIN_EMA_SEPARATION = 0.01 # 1.5%
-
 # Trend Strength Filters
-ADX_HARD_FLOOR = 50  # Keep at 50 - we want strong trends only
+REGIME_FILTER_ENABLED = False
+# Use ADX as primary filter
+ADX_HARD_FLOOR = 50  # Middle ground
+# Use regime as SECONDARY filter (not primary)
+REGIME_FILTER_ENABLED = True
+REGIME_DAILY_ADX_MIN = 10  # Very permissive
+REGIME_BB_WIDTH_MIN = 0.04  # Very permissive
+REGIME_REQUIRE_ATR_EXPANDING = False
 MIN_ATR_RATIO = 1.1
 
 # Risk/Reward
@@ -117,6 +123,8 @@ TICK_SIZE = {
     "DOGEUSDT": 0.00001,
     "ADAUSDT": 0.0001,
     "SUIUSDT": 0.0001,
+    'BNBUSDT': 0.01,
+    'BTCUSDT': 0.01,
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -124,20 +132,7 @@ TICK_SIZE = {
 # ═══════════════════════════════════════════════════════════════════════════
 
 PAIRS_LRS: List[str] = [
-    "ATOMUSDT",
-    "DOTUSDT",
-    "SOLUSDT",
-    "ADAUSDT",
-    "AVAXUSDT",
-    "APTUSDT",
-    "NEARUSDT",
-    "SUIUSDT",
-    "ARBUSDT",
-    "DOGEUSDT",
-    "AAVEUSDT",
-    "XRPUSDT",
-    "LINKUSDT",
-    "RENDERUSDT",
+    "ETHUSDT",
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════

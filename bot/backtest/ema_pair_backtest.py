@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os, sys
+
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -13,7 +14,7 @@ from bot.helpers import (
     ema_config, compute_indicators, build_htf_levels, update_htf_levels_new,
     ema_short_signal, ema_long_signal, round_price, align_by_close,
     fees_usd, build_h1, update_h1, near_htf_level, in_good_hours, veto_thresholds,
-    resample_to_htf, compute_htf_indicators
+    precompute_regime, regime_gate_fast, resample_to_htf, compute_htf_indicators
 )
 
 # --- Execution realism ---
@@ -40,6 +41,7 @@ class Position:
     trailing: bool = False  # Track if trailing active
 
 def backtest(df: pd.DataFrame,
+            regime_series: pd.Series,
              equity0: float = 1000.0,
              risk_pct: float = 0.1,
              pair: str = "LINKUSDT"):
@@ -47,6 +49,8 @@ def backtest(df: pd.DataFrame,
     Backtest aligned with live engine (lrs_pair_engine.py).
     Applies ALL gates: HTF proximity, session, veto, cooldown, daily cap, etc.
     """
+    regime_enabled = getattr(ema_config, "REGIME_FILTER_ENABLED", True)
+
     # Warm-up guard
     required_warmup_days = getattr(ema_config, "HTF_DAYS", 15) + 5  # +5 for safety
     warmup_bars = required_warmup_days * 96  # 96 bars/day for 15m
@@ -57,8 +61,8 @@ def backtest(df: pd.DataFrame,
             len(df), warmup_bars
         )
 
-    # 1) Compute indicators
-    df = compute_indicators(df.copy())
+    # # 1) Compute indicators
+    # df = compute_indicators(df.copy())
 
     # 2) Build HTF levels & H1 trend
     htf_levels = build_htf_levels(df.copy())
@@ -102,10 +106,11 @@ def backtest(df: pd.DataFrame,
         "no_ltf_long": 0,
         "no_ltf_short": 0,
         "has_open": 0,
+        "regime_choppy": 0,
     }
 
       # Then iterate only over the TEST period (e.g., last 30 days)
-    test_start_idx = max(0, len(df) - 180*96)  # last 30 days
+    test_start_idx = 30
     for i in range(test_start_idx, len(df)):
         bar = df.iloc[i]
         drop_stats["total_bars"] += 1
@@ -113,6 +118,12 @@ def backtest(df: pd.DataFrame,
         # Indicator warm-up guard (same as live)
         if bar[["atr", "atr30", "adx", "k_fast"]].isna().any():
             drop_stats["na_guard"] += 1
+            curve.append(equity)
+            continue
+        
+        # REGIME FILTER (FAST - just a lookup!)
+        if regime_enabled and not regime_gate_fast(bar.name, regime_series):
+            drop_stats["regime_choppy"] += 1
             curve.append(equity)
             continue
 
@@ -275,8 +286,8 @@ def backtest(df: pd.DataFrame,
 
                 risk_usd = equity0 * risk_pct
                 qty = risk_usd / stop_off
-                sl = round_price(entry - stop_off, pair)
-                tp = round_price(entry + tp_dist, pair)
+                sl = round_price(entry - stop_off, pair, ema_config)
+                tp = round_price(entry + tp_dist, pair, ema_config)
 
                 pos = Position(
                     dir=1, entry=entry, sl=sl, tp=tp, qty=qty,
@@ -302,8 +313,8 @@ def backtest(df: pd.DataFrame,
 
                 risk_usd = equity0 * risk_pct
                 qty = risk_usd / stop_off
-                sl = round_price(entry + stop_off, pair)
-                tp = round_price(entry - tp_dist, pair)
+                sl = round_price(entry + stop_off, pair, ema_config)
+                tp = round_price(entry - tp_dist, pair, ema_config)
 
                 pos = Position(
                     dir=-1, entry=entry, sl=sl, tp=tp, qty=qty,
@@ -362,6 +373,7 @@ def backtest(df: pd.DataFrame,
     print(f"  Daily cap reached......... {drop_stats['daily_cap']:>8} ({drop_stats['daily_cap']/drop_stats['total_bars']*100:>5.1f}%)")
     print(f"  No LTF long confirmation.. {drop_stats['no_ltf_long']:>8} ({drop_stats['no_ltf_long']/drop_stats['total_bars']*100:>5.1f}%)")
     print(f"  No LTF short confirmation. {drop_stats['no_ltf_short']:>8} ({drop_stats['no_ltf_short']/drop_stats['total_bars']*100:>5.1f}%)")
+    print (f"  Regime filter (choppy).... {drop_stats['regime_choppy']:>8} ({drop_stats['regime_choppy']/drop_stats['total_bars']*100:>5.1f}%)")
     print("="*80 + "\n")
 
     return summary, trades, pd.Series(curve, index=df.index[:len(curve)])
@@ -390,8 +402,8 @@ if __name__ == "__main__":
     )
 
     # Config
-    pair = getattr(ema_config, "PAIR", "LINKUSDT")
-    interval = getattr(ema_config, "INTERVAL", "15")
+    pair = 'ETHUSDT'
+    interval = 60
     equity = getattr(ema_config, "STAKE_SIZE_USD", 1000.0)
     risk_pct = getattr(ema_config, "RISK_PCT", 0.1)
 
@@ -403,7 +415,7 @@ if __name__ == "__main__":
 
     # Determine how much history to load (180 days)
     days_back = 31
-    bars_needed = days_back * 48  # 48 bars per day for 30m
+    bars_needed = days_back * 96  # 96 bars per day for 15m
     
     
     now = datetime.now(timezone.utc)
@@ -414,17 +426,22 @@ if __name__ == "__main__":
     hist = asyncio.run(preload_history(
         symbol=pair,
         interval=interval,
-        limit=180  # match live engine
+        limit=3000 # match live engine
     ))
 
     hist = align_by_close(hist, int(interval))
 
     logging.info("Data loaded: %d bars (%s to %s)",
                  len(hist), hist.index[0], hist.index[-1])
+    
+     # PRE-COMPUTE REGIME (ONCE!)
+    print("\nPre-computing regime filter...")
+    regime_series = precompute_regime(hist, ema_config)
 
     # Run backtest
     summary, trades, curve = backtest(
         hist,
+        regime_series=regime_series,
         equity0=equity,
         risk_pct=risk_pct,
         pair=pair
