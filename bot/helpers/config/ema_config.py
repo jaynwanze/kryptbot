@@ -58,7 +58,7 @@ MIN_EMA_SEPARATION = 0.01 # 1.5%
 # Trend Strength Filters
 REGIME_FILTER_ENABLED = False
 # Use ADX as primary filter
-ADX_HARD_FLOOR = 50  # Middle ground
+ADX_HARD_FLOOR = 50  # hard ground
 # Use regime as SECONDARY filter (not primary)
 REGIME_FILTER_ENABLED = True
 REGIME_DAILY_ADX_MIN = 10  # Very permissive
