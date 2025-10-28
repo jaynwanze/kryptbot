@@ -20,7 +20,7 @@ from collections import defaultdict
 GLOBAL_DROP_STATS = defaultdict(lambda: defaultdict(int))
 GLOBAL_DROP_STATS_LOCK = asyncio.Lock()
 
-PAIR = "ETHUSDT"
+PAIR = "ETHUSDT, BNBUSDT"
 TF_SECONDS = 60 * 60  # 1 hours
 INTERVAL = "60"          # 1H (60 minutes)
 LOOKBACK_BARS = 400       # ~66 days of 1H bars (enough for 200 EMA)
@@ -56,9 +56,7 @@ EMA_TREND_FILTER = 200  # NEW: Major trend filter
 EMA_CROSSOVER_LOOKBACK = 20 # bars
 MIN_EMA_SEPARATION = 0.01 # 1.5%
 # Trend Strength Filters
-REGIME_FILTER_ENABLED = False
-# Use ADX as primary filter
-ADX_HARD_FLOOR = 50  # hard ground
+ADX_HARD_FLOOR =50  # hard ground
 # Use regime as SECONDARY filter (not primary)
 REGIME_FILTER_ENABLED = True
 REGIME_DAILY_ADX_MIN = 10  # Very permissive
@@ -125,6 +123,8 @@ TICK_SIZE = {
     "SUIUSDT": 0.0001,
     'BNBUSDT': 0.01,
     'BTCUSDT': 0.01,
+    'LTCUSDT': 0.01,
+    'UNIUSDT': 0.001,
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -132,7 +132,7 @@ TICK_SIZE = {
 # ═══════════════════════════════════════════════════════════════════════════
 
 PAIRS_LRS: List[str] = [
-    "ETHUSDT",
+    'XRPUSDT',"ETHUSDT",'BNBUSDT','DOGEUSDT'
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -140,6 +140,8 @@ PAIRS_LRS: List[str] = [
 # ═══════════════════════════════════════════════════════════════════════════
 
 CLUSTER = {
+    "ETHUSDT": "L1",
+    "BNBUSDT": "L1",
     "NEARUSDT": "L1",
     "AVAXUSDT": "L1",
     "SOLUSDT": "L1",
