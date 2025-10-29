@@ -27,7 +27,7 @@ import sys
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
-from bot.infra.models import FvgOrderFlowPosition, FvgOrderFlowSignal, Signal, Position
+from bot.infra.models import FvgOrderFlowSignal
 from bot.engines.risk_router import RiskRouter, audit_and_override_ticks
 from bot.helpers import (
     fvg_orderflow_config,  # ← FVG config
@@ -505,8 +505,8 @@ async def consume(router: RiskRouter):
     MAX_AGE = getattr(fvg_orderflow_config, "MAX_SIGNAL_AGE_SEC", 60)
     COALESCE_SEC = getattr(fvg_orderflow_config, "COALESCE_SEC", 5)
 
-    def score(s: Signal) -> float:
-        width = abs(float(s.tp) - float(s.sl))
+    def score(s: FvgOrderFlowSignal) -> float:
+        width = abs(float(s.tp1) - float(s.sl))
         adx_w = max(0.0, min(1.0, (float(s.adx) - 12.0) / 25.0))
         ks = float(s.k_slow)
         stoch_w = (
