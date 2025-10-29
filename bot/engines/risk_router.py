@@ -1337,6 +1337,19 @@ class RiskRouter:
         except Exception as e:
             logging.warning("summary telegram send failed: %s", e)
 
+    async def current_equity(self) -> float:  # ✅ async method, returns float
+        """Get current equity from live wallet balance or fallback to config"""
+        try:
+            # Try to get live balance
+            avail = await self._get_available_usdt()
+            if avail > 0:
+                return avail
+        except Exception as e:
+            logging.warning("Failed to get live equity: %s", e)
+
+        # Fallback to initial equity
+        return self.equity
+
     async def maybe_trail(self, symbol: str, bar) -> None:
         # find open position for this symbol
         pos = next(

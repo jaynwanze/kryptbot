@@ -339,10 +339,21 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                                 getattr(fvg_long, "narrative", "")[:200],
                                 getattr(fvg_short, "key", ""),
                             )
-                            risk_usd = (
-                                fvg_orderflow_config.EQUITY
-                                * fvg_orderflow_config.RISK_PCT
-                            )
+                            # use live equity from router when available  fallback to config EQUITY
+                            try:
+                                current_equity = await router.current_equity()
+                            except Exception:
+                                    logging.warning(
+                                        "[%s] Unable to get current equity from router, using config EQUITY",
+                                        pair,
+                                    )
+                                    current_equity = None
+
+                            if current_equity is None:
+                                    current_equity = getattr(fvg_orderflow_config, "EQUITY", 0)
+
+
+                            risk_usd = current_equity * fvg_orderflow_config.RISK_PCT
                             stop_off = fvg_long.off_sl
                             qty = risk_usd / stop_off if stop_off > 0 else 0
 
@@ -432,10 +443,19 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                                     getattr(fvg_short, "narrative", "")[:200],
                                     getattr(fvg_short, "key", ""),
                                 )
-                                risk_usd = (
-                                    fvg_orderflow_config.EQUITY
-                                    * fvg_orderflow_config.RISK_PCT
-                                )
+                                try:
+                                    current_equity = await router.current_equity()
+                                except Exception:
+                                    logging.warning(
+                                        "[%s] Unable to get current equity from router, using config EQUITY",
+                                        pair,
+                                    )
+                                    current_equity = None
+
+                                if current_equity is None:
+                                    current_equity = getattr(fvg_orderflow_config, "EQUITY", 0)
+
+                                risk_usd = current_equity * fvg_orderflow_config.RISK_PCT
                                 stop_off = fvg_short.off_sl
                                 qty = risk_usd / stop_off if stop_off > 0 else 0
 

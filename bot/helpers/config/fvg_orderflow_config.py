@@ -9,7 +9,7 @@ from typing import List
 GLOBAL_DROP_STATS = defaultdict(lambda: defaultdict(int))
 GLOBAL_DROP_STATS_LOCK = asyncio.Lock()
 
-EQUITY = 20
+EQUITY = 100
 
 INTERVAL = "15"  # 15-hour bars
 # LOOKBACK_BARS = 500  # ~20 days
