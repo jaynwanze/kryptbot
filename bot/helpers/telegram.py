@@ -83,3 +83,13 @@ def alert_side_fvg_orderflow_signal(
         )
     except Exception as e:
         logging.error(f"Telegram alert failed: {e}")
+
+
+def bybit_alert(msg: str) -> None:
+    try:
+        bot.send_message(
+            TG_CHAT_ID, escape_markdown(msg, version=2), parse_mode="MarkdownV2"
+        )
+        logging.info("[Bybit] Telegram alert sent")
+    except Exception as exc:
+        logging.error("[Bybit] Telegram error: %s", exc)

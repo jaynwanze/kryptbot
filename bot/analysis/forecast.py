@@ -9,6 +9,8 @@ from datetime import datetime
 from typing import Dict, List, Optional
 from openai import AsyncOpenAI
 
+from bot.infra.bybit_client import REST
+
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 async def generate_forecast(router, pairs: List[str], drop_stats: Dict) -> str:
@@ -43,6 +45,9 @@ async def generate_forecast(router, pairs: List[str], drop_stats: Dict) -> str:
 
 ## Signal Rejection Stats (Recent)
 {context['drop_stats_summary']}
+
+Curent Prices (Active Pairs):
+{', '.join(f"{pair}: {price:.2f}" for pair, price in await _get_current_prices(pairs).items())}
 
 ## FVG Strategy Parameters
 **Timeframe:** 15-minute candles
@@ -167,3 +172,15 @@ async def _build_context(router, pairs: List[str], drop_stats: Dict) -> Dict:
         "open_positions": open_summary,
         "drop_stats_summary": drop_summary,
     }
+
+async def _get_current_prices(pairs):
+    """Fetch live prices for context"""
+    prices = {}
+    # Use your existing CCXT or Bybit client
+    for pair in pairs[:5]:  # Top 5 only
+        try:
+            ticker = await REST.fetch_ticker(pair)
+            prices[pair] = ticker['last']
+        except:
+            pass
+    return prices
