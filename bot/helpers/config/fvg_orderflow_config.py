@@ -2,7 +2,12 @@
 # FVG ORDER FLOW - 15m CONFIGURATION (OPTIMAL)
 # ═══════════════════════════════════════════════════════════════
 
+import asyncio
+from collections import defaultdict
 from typing import List
+
+GLOBAL_DROP_STATS = defaultdict(lambda: defaultdict(int))
+GLOBAL_DROP_STATS_LOCK = asyncio.Lock()
 
 EQUITY = 20
 
