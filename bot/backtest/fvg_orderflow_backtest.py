@@ -34,15 +34,32 @@ from bot.helpers import (
     fees_usd,
     detect_fvg_bearish,
     detect_fvg_bullish,
-    check_long_signal,
-    check_short_signal,
+    fvg_long_signal,
+    fvg_short_signal,
     calculate_volume_profile,
+    in_good_hours
 )
 from bot.helpers.config import fvg_orderflow_config as CONFIG
 from bot.infra.models import FvgOrderFlowPosition
 
 
 logging.basicConfig(level=logging.INFO)
+
+
+# Session hours
+def _union_hours(sw: dict[str, tuple[int, int]]) -> set[int]:
+    s = set()
+    for a, b in sw.values():
+        s |= set(range(a, b))
+    return s
+
+SESSION_WINDOWS = getattr(CONFIG, "SESSION_WINDOWS", {
+    "ASIA": (0, 8),
+    "LONDON": (8, 16),
+    "NY": (13, 22),
+})
+GOOD_HOURS = _union_hours(SESSION_WINDOWS)
+SESSION_GATING = len(GOOD_HOURS) < 24
 
 # ═══════════════════════════════════════════════════════════════════════════
 # BACKTEST ENGINE
@@ -61,6 +78,12 @@ def backtest(df, equity0, risk_pct, pair):
 
     for i in range(CONFIG.VP_PERIOD, len(df)):
         bar = df.iloc[i]
+
+        # 3) Session gate (24/7 for crypto usually)
+        if SESSION_GATING and not in_good_hours(
+            bar.name, good_hours=GOOD_HOURS
+        ):
+            continue
 
         # Update FVG list
         bull_fvg = detect_fvg_bullish(df, i)
@@ -150,7 +173,7 @@ def backtest(df, equity0, risk_pct, pair):
             signals_checked += 1
 
             # Try LONG
-            long_signal = check_long_signal(df, i, fvgs, vp)
+            long_signal = fvg_long_signal(df, i, fvgs, vp)
             if long_signal:
                 risk_usd = equity0 * risk_pct
                 stop_off = long_signal.off_sl
@@ -165,7 +188,6 @@ def backtest(df, equity0, risk_pct, pair):
                     )
 
                     phase3_pass += 1
-
                     logging.info(
                         "[%s] FVG LONG @ %s | entry %.2f sl %.2f tp1 %.2f tp2 %.2f | OF %.0f | %s",
                         pair, bar.name,
@@ -175,7 +197,7 @@ def backtest(df, equity0, risk_pct, pair):
 
             # Try SHORT
             else:
-                short_signal = check_short_signal(df, i, fvgs, vp)
+                short_signal = fvg_short_signal(df, i, fvgs, vp)
                 if short_signal:
                     risk_usd = equity0 * risk_pct
                     stop_off = short_signal.off_sl
@@ -239,7 +261,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
 
     # Config
-    pair = "ETHUSDT"
+    pair = "DOGEUSDT"
     interval = "15"  # 15-minute timeframe
     equity = 1000.0
     risk_pct = CONFIG.RISK_PCT
@@ -315,15 +337,7 @@ if __name__ == "__main__":
         logging.info("Trades saved to %s", output_file)
 
     print("\n" + "=" * 80)
-    print("COMPARISON TO 1H TIMEFRAME")
-    print("=" * 80)
-    print("\n1H Results (from your test):")
-    print("  Trades:        5 in 13 months")
-    print("  Win Rate:      0%")
-    print("  Signal Rate:   0.05%")
-    print("  Final Equity:  $466")
-    print("\n15M Results (this test):")
-    print(f"  Trades:        {summary['trades']} in 30 days")
+    print(f"  Trades:        {summary['trades']} in {days_back} days")
     print(f"  Win Rate:      {summary['win_rate']:.1f}%")
     print(f"  Signal Rate:   {summary['signal_rate']:.2f}%")
     print(f"  Final Equity:  ${summary['equity_final']:.2f}")

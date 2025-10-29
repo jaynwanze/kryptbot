@@ -23,7 +23,7 @@ class Signal:
 
 @dataclass
 class Position:
-    signal: Signal
+    signal: Signal | FvgOrderFlowSignal
     order_id: str  # Bybit parent order
     qty: float
     meta: Optional[dict] = None

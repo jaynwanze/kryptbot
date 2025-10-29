@@ -44,6 +44,41 @@ def alert_side(
         logging.error("[%s] Telegram error: %s", pair, exc)
 
 
+def alert_side_fvg_orderflow_signal(
+    pair: str,
+    bar,
+    tf: str,
+    side: str,
+    stop_off: float,
+    tp_dist: float,
+    tp2_dist: float,
+    header: str = "FVG Order Flow",
+):
+    """Alert for FVG Order Flow signals with dual TP"""
+    try:
+        msg = (
+            f"🎯 *{header}*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📊 Pair: `{pair}`\n"
+            f"⏰ TF: `{tf}m`\n"
+            f"📍 Side: *{side}*\n"
+            f"💰 Price: `{bar.c:.6f}`\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🛡 Stop: `${stop_off:.2f}` ({(stop_off/bar.c*100):.2f}%)\n"
+            f"🎯 TP1: `${tp_dist:.2f}` ({(tp_dist/bar.c*100):.2f}%)\n"
+            f"🎯 TP2: `${tp2_dist:.2f}` ({(tp2_dist/bar.c*100):.2f}%)\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📈 ADX: `{bar.adx:.1f}`\n"
+            f"📊 Volume: `{bar.v:.0f}`\n"
+        )
+
+
+        bot.send_message(
+            TG_CHAT_ID, escape_markdown(msg, version=2), parse_mode="MarkdownV2"
+        )
+    except Exception as e:
+        logging.error(f"Telegram alert failed: {e}")
+
 def bybit_alert(msg: str) -> None:
     try:
         bot.send_message(

@@ -128,78 +128,7 @@ def calculate_order_flow_score(df: pd.DataFrame, idx: int) -> float:
 
     return total_score
 
-
-
-def check_long_signal(df: pd.DataFrame, idx: int, fvgs: List[FVG],
-                          vp: VolumeProfile) -> Optional[Dict]:
-    """
-    LONG signal for 15m:
-    1. Price near unfilled bullish FVG
-    2. Order Flow score > 30 (bullish momentum)
-    3. ADX > 20 (some trend strength)
-    4. Volume surge (1.2x average)
-    5. Below POC (value area)
-    """
-    bar = df.iloc[idx]
-
-    # Check for recent bullish FVG
-    active_fvg = None
-    for fvg in fvgs:
-        if fvg.type == 'bullish' and not fvg.filled:
-            # Price testing FVG zone
-            if bar.l <= fvg.high and bar.c >= fvg.low:
-                active_fvg = fvg
-                break
-
-    if not active_fvg:
-        return None
-
-    # Calculate OF score
-    of_score = calculate_order_flow_score(df, idx)
-    if of_score < CONFIG.MIN_OF_SCORE:
-        return None
-
-    # ADX filter (relaxed for 15m)
-    if bar.adx < CONFIG.MIN_ADX:
-        return None
-
-    # Volume filter
-    if idx >= 20:
-        avg_vol = df.iloc[idx-20:idx]['v'].mean()
-        if bar.v < avg_vol * CONFIG.MIN_VOLUME_RATIO:
-            return None
-
-    # Value area filter (prefer entries below POC)
-    if bar.c > vp.poc * 1.01:  # Allow 1% above POC
-        return None
-
-    # Entry at FVG mid-point
-    entry = (active_fvg.low + active_fvg.high) / 2
-
-    # Stop Loss (tight for 15m)
-    atr = bar.get('atr', bar.c * 0.01)
-    sl = entry - (atr * CONFIG.ATR_MULT_SL)
-
-    # Take Profits
-    risk = entry - sl
-    tp1 = entry + (risk * CONFIG.TARGET_R1)
-    tp2 = entry + (risk * CONFIG.TARGET_R2)
-
-    # Mark FVG as filled
-    active_fvg.filled = True
-
-    return {
-        'entry': entry,
-        'sl': sl,
-        'tp1': tp1,
-        'tp2': tp2,
-        'of_score': of_score,
-        'level_type': 'FVG',
-        'narrative': f"Bullish FVG @ {active_fvg.low:.2f}-{active_fvg.high:.2f} | OF {of_score:.0f} | Lower VA targeting POC {vp.poc:.2f}"
-    }
-
-
-def check_long_signal(
+def fvg_long_signal(
     df: pd.DataFrame,
     idx: int,
     fvgs: List[FVG],
@@ -300,7 +229,7 @@ def check_long_signal(
     )
 
 
-def check_short_signal(
+def fvg_short_signal(
     df: pd.DataFrame,
     idx: int,
     fvgs: List[FVG],

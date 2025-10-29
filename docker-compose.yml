@@ -5,7 +5,7 @@ services:
   lrs_pair_engine:
     build: .
     image: kryptbot:latest          # reuse the same layer‑cached image
-    command: python -m bot.engines.ema_pair_engine
+    command: python -m bot.engines.fvg_orderflow_pair_engine
     container_name: krypt_pair
     env_file: .env
     restart: unless-stopped

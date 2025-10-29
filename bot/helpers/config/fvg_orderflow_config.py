@@ -4,6 +4,7 @@
 
 from typing import List
 
+EQUITY = 20
 
 INTERVAL = "60"  # 1-hour bars
 # LOOKBACK_BARS = 500  # ~20 days

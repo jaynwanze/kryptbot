@@ -14,6 +14,7 @@ import ccxt.async_support as ccxt
 from datetime import datetime
 from pathlib import Path, PurePath
 import csv
+from bot.infra.models import FvgOrderFlowSignal
 
 
 # Config & logging
@@ -213,7 +214,7 @@ class RiskRouter:
         return float(quantize_step(qty, step))
 
     # ───────────────────────────── public API ───────────────────────────────
-    async def handle(self, sig: Signal) -> None:
+    async def handle(self, sig: Signal | FvgOrderFlowSignal) -> None:
         async with self.lock:
             if sig.key in self.book:
                 logging.info("%s already active – ignoring dup", sig.key)
@@ -468,7 +469,9 @@ class RiskRouter:
     async def mark_or_last_price(self, symbol: str) -> float:
         # 1) Bybit mark price
         try:
-            resp = await asyncio.to_thread(self.http.get_tickers, category="linear", symbol=symbol)
+            resp = await asyncio.to_thread(
+                self.http.get_tickers, category="linear", symbol=symbol
+            )
             lst = resp.get("result", {}).get("list", []) or []
             mark = float(lst[0].get("markPrice", 0)) if lst else 0.0
             if mark:
@@ -492,14 +495,16 @@ class RiskRouter:
             return float((bid + ask) / 2.0)
         raise RuntimeError(f"Cannot obtain live price for {symbol}")
 
-    def _atr_risk_qty(self, sig: Signal) -> float:
+    def _atr_risk_qty(self, sig: Signal | FvgOrderFlowSignal) -> float:
         risk_usd = self.equity * float(getattr(config, "RISK_PCT", 0.1))
         stop_dist = max(abs(float(sig.entry) - float(sig.sl)), 1e-8)
         raw_qty = risk_usd / stop_dist
         step = self._qty_step[sig.symbol]
         return round(self._floor_step(raw_qty, step), 8)
 
-    async def _size_with_budget(self, sig: Signal) -> Tuple[float, float, float]:
+    async def _size_with_budget(
+        self, sig: Signal | FvgOrderFlowSignal
+    ) -> Tuple[float, float, float]:
         """Return (qty_risk, qty_budget, qty_final)."""
         step = self._qty_step[sig.symbol]
         qty_risk = self._atr_risk_qty(sig)
@@ -543,9 +548,23 @@ class RiskRouter:
 
     # ── order placement -------------------------------------------------------
 
-    async def _place_bracket(self, s: Signal, qty: float) -> str:
-        # round TP/SL to tick
-        tp_str = self._fmt_px(s.symbol, float(s.tp))
+    async def _place_bracket(self, s: Signal | FvgOrderFlowSignal, qty: float) -> str:
+        """
+        Place market entry + bracket (TP/SL).
+        For FVG signals: uses TP1 as initial target (TP2 handled by partial exit logic).
+        For standard signals: uses single TP.
+        """
+        # Detect signal type
+        is_fvg = isinstance(s, FvgOrderFlowSignal)
+
+        # Use TP1 for FVG signals, regular TP for others
+        if is_fvg and hasattr(s, "tp1"):
+            tp_price = float(s.tp1)
+        else:
+            tp_price = float(s.tp)
+
+        # Round TP/SL to tick
+        tp_str = self._fmt_px(s.symbol, tp_price)
         sl_str = self._fmt_px(s.symbol, float(s.sl))
 
         # try place; shrink on margin error (110007)
@@ -553,7 +572,7 @@ class RiskRouter:
         tries = self.RETRY_ON_110007 + 1
         last_err = None
 
-        # **USE the symbol’s lot step and send a clean string**
+        # **USE the symbol's lot step and send a clean string**
         qty_str = quantize_step(qty, step)
 
         while tries > 0:
@@ -564,7 +583,7 @@ class RiskRouter:
                     symbol=s.symbol,
                     side=s.side,
                     orderType="Market",
-                    qty=qty_str,  # <— use the quantized string
+                    qty=qty_str,
                     reduceOnly=False,
                     closeOnTrigger=False,
                 )
@@ -580,6 +599,16 @@ class RiskRouter:
                     slTriggerBy="LastPrice",
                     positionIdx=0,
                 )
+
+                log_msg = (
+                    f"Bracket placed: {s.symbol} {s.side} qty={qty_str} SL={sl_str}"
+                )
+                if is_fvg:
+                    log_msg += f" TP1={tp_str} (TP2={self._fmt_px(s.symbol, float(s.tp2))} staged)"
+                else:
+                    log_msg += f" TP={tp_str}"
+                logging.info(log_msg)
+
                 _append_csv(
                     "orders.csv",
                     {
@@ -591,6 +620,7 @@ class RiskRouter:
                         "qty": qty_str,
                         "price": "",
                         "reduce_only": "false",
+                        "signal_type": "FVG" if is_fvg else "STANDARD",
                     },
                     [
                         "ts",
@@ -601,6 +631,7 @@ class RiskRouter:
                         "qty",
                         "price",
                         "reduce_only",
+                        "signal_type",
                     ],
                 )
                 return oid
@@ -608,7 +639,6 @@ class RiskRouter:
             except Exception as e:
                 last_err = str(e)
                 if "110007" in last_err or "insufficient" in last_err.lower():
-                    # shrink then re-quantize (avoids 0.7000000000000001)
                     new_qty = max(0.0, float(qty_str) - step)
                     qty_str = quantize_step(new_qty, step)
                     tries -= 1
@@ -627,6 +657,59 @@ class RiskRouter:
                 else:
                     raise
         raise RuntimeError(f"place_bracket failed after retries: {last_err}")
+
+
+    async def _upgrade_to_tp2(self, symbol: str) -> None:
+        """
+        After TP1 hit, move TP to TP2 and tighten SL to breakeven.
+        Only for FVG Order Flow signals with tp2 defined.
+        """
+        pos = next((p for p in self.book.values() if p.signal.symbol == symbol), None)
+        if not pos:
+            return
+
+        sig = pos.signal
+
+        # Only upgrade if signal has tp2 (FVG signals)
+        if not isinstance(sig, FvgOrderFlowSignal) or not hasattr(sig, "tp2"):
+            return
+
+        entry = float(self._entry_price.get(symbol, float(sig.entry)))
+        tp2_str = self._fmt_px(symbol, float(sig.tp2))
+
+        # Move SL to breakeven (or slightly above to cover fees)
+        be_buffer = self._tick_size.get(symbol, 0.0) * 2  # 2 ticks buffer
+        if sig.side.lower() == "buy":
+            new_sl = entry + be_buffer
+        else:
+            new_sl = entry - be_buffer
+        sl_str = self._fmt_px(symbol, new_sl)
+
+        try:
+            await asyncio.to_thread(
+                self.http.set_trading_stop,
+                category="linear",
+                symbol=symbol,
+                takeProfit=tp2_str,
+                stopLoss=sl_str,
+                tpTriggerBy="LastPrice",
+                slTriggerBy="LastPrice",
+                positionIdx=0,
+            )
+
+            # Update local signal
+            pos.signal.sl = float(sl_str)
+            if hasattr(pos.signal, "tp"):
+                pos.signal.tp = float(tp2_str)
+
+            logging.info(
+                "[%s] Upgraded to TP2: SL→BE (%.6f) | TP→TP2 (%s)", symbol, new_sl, tp2_str
+            )
+            telegram.bybit_alert(
+                msg=f"[{symbol}] ✅ TP1 HIT! Upgraded: SL→BE ({sl_str}) | TP→TP2 ({tp2_str})"
+            )
+        except Exception as e:
+            logging.warning("[%s] upgrade_to_tp2 failed: %s", symbol, e)
 
     # ─────────────────────────── WS bridges & reconciler ─────────────────────
     def _on_order(self, msg: dict) -> None:
@@ -732,21 +815,38 @@ class RiskRouter:
                     ).lower()  # "stoploss"/"takeprofit"/""
 
                     if reduce_only:
-                        # Exit leg filled (TP or SL)
                         if tp_sl_type == "stoploss":
                             self.last_sl_ts[symbol] = time.time()
-                        # best-effort exit price for diagnostics
+                        elif tp_sl_type == "takeprofit":
+                            # Check if this is TP1 or TP2
+                            pos = next((p for p in self.book.values() if p.signal.symbol == symbol), None)
+                            if pos and isinstance(pos.signal, FvgOrderFlowSignal):
+                                exit_px = self._safe_float(row.get("avgPrice") or row.get("price"), 0.0)
+                                tp1_px = float(pos.signal.tp1)
+                                tp2_px = float(pos.signal.tp2) if hasattr(pos.signal, 'tp2') else 0.0
+
+                                # Determine if TP1 or TP2 based on price proximity
+                                if tp2_px and abs(exit_px - tp1_px) < abs(exit_px - tp2_px):
+                                    # TP1 hit → upgrade to TP2
+                                    logging.info("[%s] TP1 hit → upgrading to TP2", symbol)
+                                    await self._upgrade_to_tp2(symbol)
+                                    continue  # Don't close position yet
+                                else:
+                                    # TP2 hit or final TP → close position
+                                    logging.info("[%s] TP2/Final hit → closing position", symbol)
+                                    self.last_tp_ts[symbol] = time.time()
+                            else:
+                                self.last_tp_ts[symbol] = time.time()
+
+                        # Store exit price for diagnostics
                         self._exit_price[symbol] = self._safe_float(
                             row.get("avgPrice") or row.get("price"), 0.0
                         )
                         self._log_round_trip(symbol, tp_sl_type or "bracket")
-                        self._clear_symbol(
-                            symbol, reason=f"reduceOnly {tp_sl_type or ''}"
-                        )
+                        self._clear_symbol(symbol, reason=f"reduceOnly {tp_sl_type or ''}")
 
                     else:
                         # ENTRY filled → move PENDING → BOOK
-                        key = self._oid_to_key.get(oid) or self._key_by_oid(oid)
                         if key and key in self.pending:
                             self.book[key] = self.pending.pop(key)
                             self._pending_ts.pop(key, None)
@@ -1360,7 +1460,6 @@ class RiskRouter:
         except Exception as e:
             logging.warning("[%s] close_market failed: %s", symbol, e)
 
-
     async def format_drop_stats(self) -> str:
         """Format aggregated drop stats across all pairs."""
 
@@ -1392,7 +1491,9 @@ class RiskRouter:
             ]
 
             lines.append("*Top Rejection Reasons:*")
-            for label, count in sorted(rejection_items, key=lambda x: x[1], reverse=True):
+            for label, count in sorted(
+                rejection_items, key=lambda x: x[1], reverse=True
+            ):
                 if count > 0:
                     pct = (count / total_bars) * 100
                     lines.append(f"{label}: `{count}` ({pct:.1f}%)")
