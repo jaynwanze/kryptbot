@@ -85,6 +85,7 @@ def backtest(df, equity0, risk_pct, pair):
         ):
             continue
 
+        # UNCOMMENT lines 270-289
         # Update FVG list
         bull_fvg = detect_fvg_bullish(df, i)
         if bull_fvg:

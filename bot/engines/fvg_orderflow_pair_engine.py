@@ -9,8 +9,6 @@ Key Features:
 - Fair Value Gap (FVG) detection and tracking
 - Order Flow momentum scoring
 - Volume Profile analysis (POC/LVN targeting)
-- Optional HYBRID regime filter (toggle in config)
-- Strong quality filters (ADX, volume, volatility)
 - Trails winners, cuts losses
 
 Strategy:
@@ -40,6 +38,8 @@ from bot.helpers import (
     in_good_hours,
     append_csv,
     calculate_volume_profile,
+    detect_fvg_bullish,
+    detect_fvg_bearish,
 )
 from bot.data import preload_history
 from bot.commands import run_command_bot
@@ -123,7 +123,7 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
     }
 
     logging.info(
-        "[%s] History pre-loaded: %d bars (%s → %s) | Regime: %s",
+        "[%s] History pre-loaded: %d bars (%s → %s)",
         pair,
         len(hist),
         hist.index[0],
@@ -235,36 +235,28 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                     ):
                         continue
 
-                    # Trail open positions
-                    # try:
-                    #     await router.maybe_trail(pair, bar)
-                    # except Exception as e:
-                    #     logging.warning("[%s] trail update failed: %s", pair, e)
-
                     # # 5.5) Cool-down after SL
-                    # last_sl = router.last_sl_ts.get(pair, 0.0)
-                    # if last_sl and (time.time() - last_sl) < COOLDOWN_SEC:
-                    #     left_days = (COOLDOWN_SEC - (time.time() - last_sl)) / 86400.0
-                    #     logging.info(
-                    #         "[%s] Cool-down after SL active — %.1f days left",
-                    #         pair,
-                    #         left_days,
-                    #     )
-                    #     h1 = update_h1(h1, bar.name, float(bar.c))
-                    #     htf_levels = update_htf_levels_new(htf_levels, bar)
-                    #     continue
+                    last_sl = router.last_sl_ts.get(pair, 0.0)
+                    if last_sl and (time.time() - last_sl) < COOLDOWN_SEC:
+                        left_days = (COOLDOWN_SEC - (time.time() - last_sl)) / 86400.0
+                        logging.info(
+                            "[%s] Cool-down after SL active — %.1f days left",
+                            pair,
+                            left_days,
+                        )
+                        continue
 
                     # # 5.6) Cool-down after TP
-                    # if COOLDOWN_DAYS_AFTER_TP > 0 and router.last_tp_ts:
-                    #     last_tp = max(router.last_tp_ts.values())
-                    #     if (time.time() - last_tp) < (COOLDOWN_DAYS_AFTER_TP * 86400):
-                    #         left_days = (COOLDOWN_DAYS_AFTER_TP * 86400 - (time.time() - last_tp)) / 86400.0
-                    #         logging.info(
-                    #             "[%s] Cool-down after TP active — %.2f days left",
-                    #             pair,
-                    #             left_days,
-                    #         )
-                    #         continue
+                    if COOLDOWN_DAYS_AFTER_TP > 0 and router.last_tp_ts:
+                        last_tp = max(router.last_tp_ts.values())
+                        if (time.time() - last_tp) < (COOLDOWN_DAYS_AFTER_TP * 86400):
+                            left_days = (COOLDOWN_DAYS_AFTER_TP * 86400 - (time.time() - last_tp)) / 86400.0
+                            logging.info(
+                                "[%s] Cool-down after TP active — %.2f days left",
+                                pair,
+                                left_days,
+                            )
+                            continue
 
                     # SL/TP distances
                     i = len(hist) - 1
@@ -290,6 +282,15 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                     # ═══════════════════════════════════════════════════════
                     # FVG DETECTION AND FILTERING
                     # ═══════════════════════════════════════════════════════
+                    bull_fvg = detect_fvg_bullish(hist, i)
+                    if bull_fvg:
+                        fvgs.append(bull_fvg)
+                        logging.debug("[%s] Bullish FVG detected @ %.5f", pair, bar.c)
+
+                    bear_fvg = detect_fvg_bearish(hist, i)
+                    if bear_fvg:
+                        fvgs.append(bear_fvg)
+                        logging.debug("[%s] Bearish FVG detected @ %.5f", pair, bar.c)
                     fvgs = [
                         f
                         for f in fvgs
@@ -328,60 +329,64 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                             )
                             stop_off = fvg_long.off_sl
                             qty = risk_usd / stop_off if stop_off > 0 else 0
-                            if qty > 0:
-                                phase3_pass += 1
-                                telegram.alert_side_fvg_orderflow_signal(
-                                    pair,
-                                    bar,
-                                    TF,
-                                    "LONG",
-                                    stop_off=fvg_long.off_sl,
-                                    tp_dist=fvg_long.off_tp1,
-                                    tp2_dist=fvg_long.off_tp2,
-                                    header=header,
-                                )
 
-                                append_csv(
-                                    "signals_fvg.csv",
-                                    {
-                                        "ts": fvg_long.ts.isoformat(),
-                                        "symbol": fvg_long.symbol,
-                                        "side": fvg_long.side,
-                                        "entry": float(fvg_long.entry),
-                                        "sl": float(fvg_long.sl),
-                                        "tp1": float(fvg_long.tp1),
-                                        "tp2": float(fvg_long.tp2),
-                                        "adx": fvg_long.adx,
-                                        "of_score": fvg_long.of_score,
-                                        "level_type": fvg_long.level_type,
-                                        "narrative": fvg_long.narrative,
-                                        "off_sl": fvg_long.off_sl,
-                                        "off_tp1": fvg_long.off_tp1,
-                                        "off_tp2": fvg_long.off_tp2,
-                                        "key": fvg_long.key,
-                                    },
-                                    [
-                                        "ts",
-                                        "symbol",
-                                        "side",
-                                        "entry",
-                                        "sl",
-                                        "tp1",
-                                        "tp2",
-                                        "adx",
-                                        "of_score",
-                                        "level_type",
-                                        "narrative",
-                                        "off_sl",
-                                        "off_tp1",
-                                        "off_tp2",
-                                        "key",
-                                    ],
-                                    log_dir=LOG_DIR,
-                                )
+                            if qty <= 0:
+                                logging.warning("[%s] Skipping LONG - invalid qty (stop_off=%.5f)", pair, stop_off)
+                                continue
 
-                                await SIGNAL_Q.put(fvg_long)
-                                last_signal_ts[pair] = time.time()
+                            phase3_pass += 1
+                            telegram.alert_side_fvg_orderflow_signal(
+                                pair,
+                                bar,
+                                TF,
+                                "LONG",
+                                stop_off=fvg_long.off_sl,
+                                tp_dist=fvg_long.off_tp1,
+                                tp2_dist=fvg_long.off_tp2,
+                                header=header,
+                            )
+
+                            append_csv(
+                                "signals_fvg.csv",
+                                {
+                                    "ts": fvg_long.ts.isoformat(),
+                                    "symbol": fvg_long.symbol,
+                                    "side": fvg_long.side,
+                                    "entry": float(fvg_long.entry),
+                                    "sl": float(fvg_long.sl),
+                                    "tp1": float(fvg_long.tp1),
+                                    "tp2": float(fvg_long.tp2),
+                                    "adx": fvg_long.adx,
+                                    "of_score": fvg_long.of_score,
+                                    "level_type": fvg_long.level_type,
+                                    "narrative": fvg_long.narrative,
+                                    "off_sl": fvg_long.off_sl,
+                                    "off_tp1": fvg_long.off_tp1,
+                                    "off_tp2": fvg_long.off_tp2,
+                                    "key": fvg_long.key,
+                                },
+                                [
+                                    "ts",
+                                    "symbol",
+                                    "side",
+                                    "entry",
+                                    "sl",
+                                    "tp1",
+                                    "tp2",
+                                    "adx",
+                                    "of_score",
+                                    "level_type",
+                                    "narrative",
+                                    "off_sl",
+                                    "off_tp1",
+                                    "off_tp2",
+                                    "key",
+                                ],
+                                log_dir=LOG_DIR,
+                            )
+
+                            await SIGNAL_Q.put(fvg_long)
+                            last_signal_ts[pair] = time.time()
 
                     # SHORT: Bearish FVG + negative Order Flow + quality filters
                     else:
@@ -402,59 +407,63 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                                 )
                                 stop_off = fvg_short.off_sl
                                 qty = risk_usd / stop_off if stop_off > 0 else 0
-                                if qty > 0:
-                                    phase3_pass += 1
-                                    telegram.alert_side_fvg_orderflow_signal(
-                                        pair,
-                                        bar,
-                                        TF,
-                                        "SHORT",
-                                        stop_off=fvg_short.off_sl,
-                                        tp_dist=fvg_short.off_tp1,
-                                        tp2_dist=fvg_short.off_tp2,
-                                        header=header,
-                                    )
 
-                                    append_csv(
-                                        "signals_fvg.csv",
-                                        {
-                                            "ts": fvg_short.ts.isoformat(),
-                                            "symbol": fvg_short.symbol,
-                                            "side": fvg_short.side,
-                                            "entry": float(fvg_short.entry),
-                                            "sl": float(fvg_short.sl),
-                                            "tp1": float(fvg_short.tp1),
-                                            "tp2": float(fvg_short.tp2),
-                                            "adx": fvg_short.adx,
-                                            "of_score": fvg_short.of_score,
-                                            "level_type": fvg_short.level_type,
-                                            "narrative": fvg_short.narrative,
-                                            "off_sl": fvg_short.off_sl,
-                                            "off_tp1": fvg_short.off_tp1,
-                                            "off_tp2": fvg_short.off_tp2,
-                                            "key": fvg_short.key,
-                                        },
-                                        [
-                                            "ts",
-                                            "symbol",
-                                            "side",
-                                            "entry",
-                                            "sl",
-                                            "tp1",
-                                            "tp2",
-                                            "adx",
-                                            "of_score",
-                                            "level_type",
-                                            "narrative",
-                                            "off_sl",
-                                            "off_tp1",
-                                            "off_tp2",
-                                            "key",
-                                        ],
-                                        log_dir=LOG_DIR,
-                                    )
-                                    await SIGNAL_Q.put(fvg_short)
-                                    last_signal_ts[pair] = time.time()
+                                if qty <= 0:
+                                    logging.warning("[%s] Skipping LONG - invalid qty (stop_off=%.5f)", pair, stop_off)
+                                    continue
+
+                                phase3_pass += 1
+                                telegram.alert_side_fvg_orderflow_signal(
+                                    pair,
+                                    bar,
+                                    TF,
+                                    "SHORT",
+                                    stop_off=fvg_short.off_sl,
+                                    tp_dist=fvg_short.off_tp1,
+                                    tp2_dist=fvg_short.off_tp2,
+                                    header=header,
+                                )
+
+                                append_csv(
+                                    "signals_fvg.csv",
+                                    {
+                                        "ts": fvg_short.ts.isoformat(),
+                                        "symbol": fvg_short.symbol,
+                                        "side": fvg_short.side,
+                                        "entry": float(fvg_short.entry),
+                                        "sl": float(fvg_short.sl),
+                                        "tp1": float(fvg_short.tp1),
+                                        "tp2": float(fvg_short.tp2),
+                                        "adx": fvg_short.adx,
+                                        "of_score": fvg_short.of_score,
+                                        "level_type": fvg_short.level_type,
+                                        "narrative": fvg_short.narrative,
+                                        "off_sl": fvg_short.off_sl,
+                                        "off_tp1": fvg_short.off_tp1,
+                                        "off_tp2": fvg_short.off_tp2,
+                                        "key": fvg_short.key,
+                                    },
+                                    [
+                                        "ts",
+                                        "symbol",
+                                        "side",
+                                        "entry",
+                                        "sl",
+                                        "tp1",
+                                        "tp2",
+                                        "adx",
+                                        "of_score",
+                                        "level_type",
+                                        "narrative",
+                                        "off_sl",
+                                        "off_tp1",
+                                        "off_tp2",
+                                        "key",
+                                    ],
+                                    log_dir=LOG_DIR,
+                                )
+                                await SIGNAL_Q.put(fvg_short)
+                                last_signal_ts[pair] = time.time()
                         else:
                             drop_stats["no_fvg_long"] += 1
                             drop_stats["no_fvg_short"] += 1
