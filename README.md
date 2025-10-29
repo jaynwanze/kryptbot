@@ -6,7 +6,7 @@ Advanced algorithmic trading system for cryptocurrency markets with multiple str
 
 ## 📊 **Active Trading Strategies**
 
-### **1. FVG Order Flow Engine** (Primary - 1H Timeframe)
+### **1. FVG Order Flow Engine** (Primary - 15m Timeframe)
 **Status**: ✅ Live Production
 
 Advanced institutional-style strategy using Fair Value Gaps (FVG) and Order Flow analysis.
