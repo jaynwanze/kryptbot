@@ -29,6 +29,10 @@ async def generate_forecast(router, pairs: List[str], drop_stats: Dict) -> str:
     # Gather context
     context = await _build_context(router, pairs, drop_stats)
 
+    # Fetch current prices BEFORE building prompt
+    current_prices = await _get_current_prices(pairs)
+    prices_str = ', '.join(f"{pair}: ${price:.5f}" for pair, price in current_prices.items())
+
     # Build comprehensive prompt with FVG-specific expectations
     prompt = f"""You are an expert crypto trading analyst specializing in FVG (Fair Value Gap) Order Flow strategies. Analyze the current market conditions and provide a concise trading forecast.
 
@@ -46,8 +50,8 @@ async def generate_forecast(router, pairs: List[str], drop_stats: Dict) -> str:
 ## Signal Rejection Stats (Recent)
 {context['drop_stats_summary']}
 
-Curent Prices (Active Pairs):
-{', '.join(f"{pair}: {price:.2f}" for pair, price in await _get_current_prices(pairs).items())}
+## Current Prices
+{prices_str if prices_str else 'Price data unavailable'}
 
 ## FVG Strategy Parameters
 **Timeframe:** 15-minute candles
