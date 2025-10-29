@@ -53,9 +53,9 @@ LOG_DIR = Path(getattr(fvg_orderflow_config, "LOG_DIR", "./logs"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # Cooldowns
-COOLDOWN_DAYS_AFTER_SL = getattr(fvg_orderflow_config, "COOLDOWN_DAYS_AFTER_SL", 0.5)
-COOLDOWN_DAYS_AFTER_TP = getattr(fvg_orderflow_config, "COOLDOWN_DAYS_AFTER_TP", 0.25)
-COOLDOWN_SEC = COOLDOWN_DAYS_AFTER_SL * 86400
+COOLDOWN_MINUTES_AFTER_SL = getattr(fvg_orderflow_config, "COOLDOWN_MINUTES_AFTER_SL", 15)
+COOLDOWN_MINUTES_AFTER_TP = getattr(fvg_orderflow_config, "COOLDOWN_MINUTES_AFTER_TP", 15)
+COOLDOWN_SEC = COOLDOWN_MINUTES_AFTER_SL * 60
 
 
 # Session hours
@@ -242,7 +242,7 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                     # # 5.5) Cool-down after SL
                     last_sl = router.last_sl_ts.get(pair, 0.0)
                     if last_sl and (time.time() - last_sl) < COOLDOWN_SEC:
-                        left_days = (COOLDOWN_SEC - (time.time() - last_sl)) / 86400.0
+                        left_days = (COOLDOWN_SEC - (time.time() - last_sl)) / 60
                         logging.info(
                             "[%s] Cool-down after SL active — %.1f days left",
                             pair,
@@ -251,16 +251,16 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                         continue
 
                     # # 5.6) Cool-down after TP
-                    if COOLDOWN_DAYS_AFTER_TP > 0 and router.last_tp_ts:
-                        last_tp = max(router.last_tp_ts.values())
-                        if (time.time() - last_tp) < (COOLDOWN_DAYS_AFTER_TP * 86400):
-                            left_days = (
-                                COOLDOWN_DAYS_AFTER_TP * 86400 - (time.time() - last_tp)
-                            ) / 86400.0
+                    if COOLDOWN_MINUTES_AFTER_TP > 0 and router.last_tp_ts:
+                        last_tp = router.last_tp_ts.get(pair, 0.0)
+                        if (time.time() - last_tp) < (COOLDOWN_MINUTES_AFTER_TP * 60):
+                            left_minutes = (
+                                COOLDOWN_MINUTES_AFTER_TP * 60 - (time.time() - last_tp)
+                            ) / 60
                             logging.info(
-                                "[%s] Cool-down after TP active — %.2f days left",
+                                "[%s] Cool-down after TP active — %.2f mins left",
                                 pair,
-                                left_days,
+                                left_minutes,
                             )
                             continue
 

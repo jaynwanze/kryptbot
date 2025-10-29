@@ -30,6 +30,9 @@ FVG_MIN_GAP_PCT: float = 0.2  # 0.2% minimum gap (tighter for 15m)
 # NEAR_LVN_THRESHOLD_ATR = 0.5  # Must be within 0.5 ATR of LVN
 # NEAR_POC_THRESHOLD_ATR = 1.0
 
+COOLDOWN_MINUTES_AFTER_SL = 15   # 1 hour after stop loss
+COOLDOWN_MINUTES_AFTER_TP = 15   # 15 minutes after take profit (1 candle)
+
 # Momentum Filters
 ADX_FLOOR = 25  # Strong trend required
 MIN_ATR_RATIO = 0.8  # Volatility check
