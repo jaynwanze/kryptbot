@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # ────────────────────────────────────────────────────────────────
-#  FVG ORDER FLOW LIVE ENGINE (15m → 1H Timeframe)
+#  FVG ORDER FLOW LIVE ENGINE (15m)
 # ────────────────────────────────────────────────────────────────
 """
-Live trading engine for FVG ORDER FLOW strategy on 1H timeframe.
+Live trading engine for FVG ORDER FLOW strategy on 15 timeframe.
 
 Key Features:
 - Fair Value Gap (FVG) detection and tracking
@@ -94,9 +94,7 @@ SIGNAL_Q: Queue = Queue(maxsize=100)
 last_signal_ts: dict[str, float] = {}
 recent_exec_ts = deque(maxlen=256)
 daily_count = defaultdict(int)
-fvgs = []
-signals_checked = 0
-phase3_pass = 0
+fvgs: dict[str, list] = {}
 
 
 # ────────────────────────────────────────────────────────────────
@@ -113,6 +111,12 @@ async def _refresh_meta(router, pairs, every_min=60):
 # ────────────────────────────────────────────────────────────────
 async def kline_stream(pair: str, router: RiskRouter) -> None:
     topic = f"kline.{TF}.{pair}"
+    # Initialize per-pair FVG list
+    if pair not in fvgs:
+        fvgs[pair] = []
+
+    signals_checked = 0
+    phase3_pass = 0
 
     # Preload recent history
     hist = await preload_history(symbol=pair, interval=TF, limit=LOOKBACK)
@@ -250,7 +254,9 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                     if COOLDOWN_DAYS_AFTER_TP > 0 and router.last_tp_ts:
                         last_tp = max(router.last_tp_ts.values())
                         if (time.time() - last_tp) < (COOLDOWN_DAYS_AFTER_TP * 86400):
-                            left_days = (COOLDOWN_DAYS_AFTER_TP * 86400 - (time.time() - last_tp)) / 86400.0
+                            left_days = (
+                                COOLDOWN_DAYS_AFTER_TP * 86400 - (time.time() - last_tp)
+                            ) / 86400.0
                             logging.info(
                                 "[%s] Cool-down after TP active — %.2f days left",
                                 pair,
@@ -284,16 +290,16 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                     # ═══════════════════════════════════════════════════════
                     bull_fvg = detect_fvg_bullish(hist, i)
                     if bull_fvg:
-                        fvgs.append(bull_fvg)
+                        fvgs[pair].append(bull_fvg)
                         logging.debug("[%s] Bullish FVG detected @ %.5f", pair, bar.c)
 
                     bear_fvg = detect_fvg_bearish(hist, i)
                     if bear_fvg:
-                        fvgs.append(bear_fvg)
+                        fvgs[pair].append(bear_fvg)
                         logging.debug("[%s] Bearish FVG detected @ %.5f", pair, bar.c)
-                    fvgs = [
+                    fvgs[pair] = [
                         f
-                        for f in fvgs
+                        for f in fvgs[pair]
                         if (bar.name - f.timestamp).total_seconds() / 3600 < 24
                     ]
 
@@ -305,12 +311,11 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                         continue
 
                     # Now pass it to signals
-                    fvg_long = fvg_long_signal(hist, i, fvgs, vp)
-                    fvg_short = fvg_short_signal(hist, i, fvgs, vp)
+                    fvg_long = fvg_long_signal(hist, i, fvgs[pair], vp)
+                    fvg_short = fvg_short_signal(hist, i, fvgs[pair], vp)
                     # ═══════════════════════════════════════════════════════
                     # FVG ORDER FLOW SIGNAL CHECKS
                     # ═══════════════════════════════════════════════════════
-
                     # LONG: Bullish FVG + positive Order Flow + quality filters
                     if fvg_long:
                         if router.has_open(pair):
@@ -331,7 +336,11 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                             qty = risk_usd / stop_off if stop_off > 0 else 0
 
                             if qty <= 0:
-                                logging.warning("[%s] Skipping LONG - invalid qty (stop_off=%.5f)", pair, stop_off)
+                                logging.warning(
+                                    "[%s] Skipping LONG - invalid qty (stop_off=%.5f)",
+                                    pair,
+                                    stop_off,
+                                )
                                 continue
 
                             phase3_pass += 1
@@ -409,7 +418,11 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                                 qty = risk_usd / stop_off if stop_off > 0 else 0
 
                                 if qty <= 0:
-                                    logging.warning("[%s] Skipping LONG - invalid qty (stop_off=%.5f)", pair, stop_off)
+                                    logging.warning(
+                                        "[%s] Skipping LONG - invalid qty (stop_off=%.5f)",
+                                        pair,
+                                        stop_off,
+                                    )
                                     continue
 
                                 phase3_pass += 1
@@ -620,12 +633,13 @@ async def main():
     pairs = getattr(fvg_orderflow_config, "PAIRS", ["DOGEUSDT"])
 
     logging.info("=" * 80)
-    logging.info("FVG ORDER FLOW LIVE ENGINE - 1H Timeframe")
+    logging.info("FVG ORDER FLOW LIVE ENGINE - 15M Timeframe")
     logging.info("Pairs: %s", ", ".join(pairs))
     logging.info(
-        "Config: ADX_FLOOR=%d, TARGET_R1=%.1f, REGIME=%s",
+        "Config: ADX_FLOOR=%d, TARGET_R1=%.1f, TARGET_R2=%s",
         getattr(fvg_orderflow_config, "ADX_FLOOR", 25),
         getattr(fvg_orderflow_config, "TARGET_R1", 1.5),
+        getattr(fvg_orderflow_config, "TARGET_R2", "Disabled"),
         (
             "ON"
             if getattr(fvg_orderflow_config, "REGIEME_FILTER_ENABLED", False)
