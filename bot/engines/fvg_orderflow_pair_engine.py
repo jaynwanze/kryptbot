@@ -322,12 +322,23 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                             logging.info("[%s] No-trade (already open)", pair)
                         else:
                             logging.info(
-                                "[%s] LONG FVG signal  OF_score=%.0f | price=%.5f | adx=%.1f",
-                                pair,
-                                fvg_long.of_score,
-                                bar.c,
-                                bar.adx,
-                            )
+                                    "[%s] Long FVG signal OF_score=%.0f | entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f | price=%.5f | adx=%.1f | atr=%.5f atr30=%.5f atr_ratio=%.2f | vol=%.1f | level=%s | narrative=%s | key=%s",
+                                    pair,
+                                    fvg_short.of_score,
+                                    float(fvg_long.entry),
+                                    float(fvg_long.sl),
+                                    float(fvg_long.tp1),
+                                    float(fvg_long.tp2),
+                                    bar.c,
+                                    bar.adx,
+                                    float(bar.atr),
+                                    float(bar.atr30),
+                                    float(bar.atr / bar.atr30) if bar.atr30 else 0.0,
+                                    float(bar.v),
+                                    getattr(fvg_long, "level_type", ""),
+                                    getattr(fvg_long, "narrative", "")[:200],
+                                    getattr(fvg_short, "key", ""),
+                                )
                             risk_usd = (
                                 fvg_orderflow_config.EQUITY
                                 * fvg_orderflow_config.RISK_PCT
@@ -404,11 +415,22 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                                 logging.info("[%s] No-trade (already open)", pair)
                             else:
                                 logging.info(
-                                    "[%s] SHORT FVG signal  OF_score=%.0f | price=%.5f | adx=%.1f",
+                                    "[%s] SHORT FVG signal OF_score=%.0f | entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f | price=%.5f | adx=%.1f | atr=%.5f atr30=%.5f atr_ratio=%.2f | vol=%.1f | level=%s | narrative=%s | key=%s",
                                     pair,
                                     fvg_short.of_score,
+                                    float(fvg_short.entry),
+                                    float(fvg_short.sl),
+                                    float(fvg_short.tp1),
+                                    float(fvg_short.tp2),
                                     bar.c,
                                     bar.adx,
+                                    float(bar.atr),
+                                    float(bar.atr30),
+                                    float(bar.atr / bar.atr30) if bar.atr30 else 0.0,
+                                    float(bar.v),
+                                    getattr(fvg_short, "level_type", ""),
+                                    getattr(fvg_short, "narrative", "")[:200],
+                                    getattr(fvg_short, "key", ""),
                                 )
                                 risk_usd = (
                                     fvg_orderflow_config.EQUITY
