@@ -640,11 +640,6 @@ async def main():
         getattr(fvg_orderflow_config, "ADX_FLOOR", 25),
         getattr(fvg_orderflow_config, "TARGET_R1", 1.5),
         getattr(fvg_orderflow_config, "TARGET_R2", "Disabled"),
-        (
-            "ON"
-            if getattr(fvg_orderflow_config, "REGIEME_FILTER_ENABLED", False)
-            else "OFF"
-        ),
     )
     logging.info("=" * 80)
 
