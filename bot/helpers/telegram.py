@@ -49,41 +49,37 @@ def alert_side_fvg_orderflow_signal(
     bar,
     tf: str,
     side: str,
-    stop_off: float,
-    tp_dist: float,
-    tp2_dist: float,
+    stop_price: float,      # Rename to stop_price
+    tp1_price: float,       # Rename to tp1_price
+    tp2_price: float,      # Rename to tp2_price
     header: str = "FVG Order Flow",
 ):
     """Alert for FVG Order Flow signals with dual TP"""
     try:
+        # Calculate offsets for percentage display
+        entry = bar.c
+        stop_pct = abs(stop_price - entry) / entry * 100
+        tp1_pct = abs(tp1_price - entry) / entry * 100
+        tp2_pct = abs(tp2_price - entry) / entry * 100
+
         msg = (
             f"🎯 *{header}*\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"📊 Pair: `{pair}`\n"
             f"⏰ TF: `{tf}m`\n"
             f"📍 Side: *{side}*\n"
-            f"💰 Price: `{bar.c:.6f}`\n"
+            f"💰 Price: `{entry:.5f}`\n"  # Changed to 5 decimals for crypto
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🛡 Stop: `${stop_off:.2f}` ({(stop_off/bar.c*100):.2f}%)\n"
-            f"🎯 TP1: `${tp_dist:.2f}` ({(tp_dist/bar.c*100):.2f}%)\n"
-            f"🎯 TP2: `${tp2_dist:.2f}` ({(tp2_dist/bar.c*100):.2f}%)\n"
+            f"🛡 Stop: `${stop_price:.5f}` ({stop_pct:.2f}%)\n"
+            f"🎯 TP1: `${tp1_price:.5f}` ({tp1_pct:.2f}%)\n"
+            f"🎯 TP2: `${tp2_price:.5f}` ({tp2_pct:.2f}%)\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"📈 ADX: `{bar.adx:.1f}`\n"
             f"📊 Volume: `{bar.v:.0f}`\n"
         )
-
 
         bot.send_message(
             TG_CHAT_ID, escape_markdown(msg, version=2), parse_mode="MarkdownV2"
         )
     except Exception as e:
         logging.error(f"Telegram alert failed: {e}")
-
-def bybit_alert(msg: str) -> None:
-    try:
-        bot.send_message(
-            TG_CHAT_ID, escape_markdown(msg, version=2), parse_mode="MarkdownV2"
-        )
-        logging.info("[Bybit] Telegram alert sent")
-    except Exception as exc:
-        logging.error("[Bybit] Telegram error: %s", exc)

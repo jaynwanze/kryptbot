@@ -311,8 +311,8 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                         continue
 
                     # Now pass it to signals
-                    fvg_long = fvg_long_signal(hist, i, fvgs[pair], vp)
-                    fvg_short = fvg_short_signal(hist, i, fvgs[pair], vp)
+                    fvg_long = fvg_long_signal(hist, i, fvgs[pair], vp, pair)
+                    fvg_short = fvg_short_signal(hist, i, fvgs[pair], vp, pair)
                     # ═══════════════════════════════════════════════════════
                     # FVG ORDER FLOW SIGNAL CHECKS
                     # ═══════════════════════════════════════════════════════
@@ -322,23 +322,23 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                             logging.info("[%s] No-trade (already open)", pair)
                         else:
                             logging.info(
-                                    "[%s] Long FVG signal OF_score=%.0f | entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f | price=%.5f | adx=%.1f | atr=%.5f atr30=%.5f atr_ratio=%.2f | vol=%.1f | level=%s | narrative=%s | key=%s",
-                                    pair,
-                                    fvg_short.of_score,
-                                    float(fvg_long.entry),
-                                    float(fvg_long.sl),
-                                    float(fvg_long.tp1),
-                                    float(fvg_long.tp2),
-                                    bar.c,
-                                    bar.adx,
-                                    float(bar.atr),
-                                    float(bar.atr30),
-                                    float(bar.atr / bar.atr30) if bar.atr30 else 0.0,
-                                    float(bar.v),
-                                    getattr(fvg_long, "level_type", ""),
-                                    getattr(fvg_long, "narrative", "")[:200],
-                                    getattr(fvg_short, "key", ""),
-                                )
+                                "[%s] Long FVG signal OF_score=%.0f | entry=%.5f sl=%.5f tp1=%.5f tp2=%.5f | price=%.5f | adx=%.1f | atr=%.5f atr30=%.5f atr_ratio=%.2f | vol=%.1f | level=%s | narrative=%s | key=%s",
+                                pair,
+                                fvg_short.of_score,
+                                float(fvg_long.entry),
+                                float(fvg_long.sl),
+                                float(fvg_long.tp1),
+                                float(fvg_long.tp2),
+                                bar.c,
+                                bar.adx,
+                                float(bar.atr),
+                                float(bar.atr30),
+                                float(bar.atr / bar.atr30) if bar.atr30 else 0.0,
+                                float(bar.v),
+                                getattr(fvg_long, "level_type", ""),
+                                getattr(fvg_long, "narrative", "")[:200],
+                                getattr(fvg_short, "key", ""),
+                            )
                             risk_usd = (
                                 fvg_orderflow_config.EQUITY
                                 * fvg_orderflow_config.RISK_PCT
@@ -360,9 +360,9 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                                 bar,
                                 TF,
                                 "LONG",
-                                stop_off=fvg_long.off_sl,
-                                tp_dist=fvg_long.off_tp1,
-                                tp2_dist=fvg_long.off_tp2,
+                                stop_price=fvg_long.sl,
+                                tp1_price=fvg_long.tp1,
+                                tp2_price=fvg_long.tp2,
                                 header=header,
                             )
 
@@ -453,9 +453,9 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                                     bar,
                                     TF,
                                     "SHORT",
-                                    stop_off=fvg_short.off_sl,
-                                    tp_dist=fvg_short.off_tp1,
-                                    tp2_dist=fvg_short.off_tp2,
+                                    stop_price=fvg_short.sl,
+                                    tp1_price=fvg_short.tp1,
+                                    tp2_price=fvg_short.tp2,
                                     header=header,
                                 )
 
