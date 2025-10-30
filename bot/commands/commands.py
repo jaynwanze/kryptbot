@@ -19,13 +19,13 @@ async def forecast_cmd_async(config, router, update, context):
     """Async forecast command."""
     if not _authorized(update):
         return update.effective_message.reply_text("Sorry, not allowed.")
-    
+
     # Send "thinking" message
     thinking_msg = update.effective_message.reply_text("🤖 Analyzing market conditions...")
-    
+
     try:
-        pairs = getattr(config, "PAIRS_LRS", [])
-        
+        pairs = getattr(config, "PAIRS", [])
+
         # Get aggregated drop stats
         async with config.GLOBAL_DROP_STATS_LOCK:
             # Sum across all pairs
@@ -33,40 +33,40 @@ async def forecast_cmd_async(config, router, update, context):
             for pair_stats in config.GLOBAL_DROP_STATS.values():
                 for key, val in pair_stats.items():
                     totals[key] += val
-        
+
         # Generate forecast
         forecast = await generate_forecast(router, pairs, totals)
-        
+
         # Delete thinking message and send forecast
         thinking_msg.delete()
         return update.effective_message.reply_text(
             forecast,
             parse_mode=ParseMode.MARKDOWN
         )
-        
+
     except Exception as e:
         logging.error(f"Forecast command failed: {e}")
         thinking_msg.delete()
         return update.effective_message.reply_text(f"⚠️ Forecast failed: {str(e)}")
-    
+
 async def format_recent_trades_detail(router, hours=24):
     """Show last N trades with details"""
     recent = list(router.closed_trades)[-10:]
     if not recent:
         return "No recent trades."
-    
+
     lines = ["📊 *Recent Trades (Last 10):*\n"]
     for t in recent:
         symbol = t['symbol']
         side = t['side'].upper()
         net = t['net']
         emoji = "✅" if net > 0 else "❌"
-        
+
         lines.append(
             f"{emoji} `{symbol}` {side}: "
             f"`${net:+.2f}` (fees: ${t['fees']:.2f})"
         )
-    
+
     return "\n".join(lines)
 
 async def fetch_executions(http, since_ms: int, until_ms: int):
@@ -241,9 +241,9 @@ def forecast_cmd(config, router, update, context):
     """Wrapper to run async forecast command."""
     if not _authorized(update):
         return update.effective_message.reply_text("Sorry, not allowed.")
-    
+
     logging.info("[%s] Forecast requested", update.effective_user.id)
-    
+
     # Run async command in router's event loop
     fut = asyncio.run_coroutine_threadsafe(
         forecast_cmd_async(config, router, update, context),
@@ -254,7 +254,7 @@ def forecast_cmd(config, router, update, context):
     except Exception as e:
         logging.error(f"Forecast command error: {e}")
         return update.effective_message.reply_text("⚠️ Forecast timed out or failed.")
-    
+
 def ping_cmd(update, context):
     logging.info("[%s] Ping command received", update.effective_user.id)
     return update.effective_message.reply_text("pong ✅")
@@ -262,7 +262,7 @@ def ping_cmd(update, context):
 def dropstats_cmd(router, update, context):
     if not _authorized(update):
         return update.effective_message.reply_text("Sorry, not allowed.")
-    
+
     txt = _run(router, router.format_drop_stats()) or "No stats available."
     logging.info("[%s] Drop stats requested", update.effective_user.id)
     return update.effective_message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
@@ -309,7 +309,7 @@ def fees_cmd(router, update, context):
 def trades_detail_cmd(router, update, context):
     if not _authorized(update):
         return update.effective_message.reply_text("Sorry, not allowed.")
-    
+
     txt = _run(router, format_recent_trades_detail(router)) or "No trades."
     return update.effective_message.reply_text(txt, parse_mode=ParseMode.MARKDOWN)
 

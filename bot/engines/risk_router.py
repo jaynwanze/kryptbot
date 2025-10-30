@@ -1525,3 +1525,72 @@ class RiskRouter:
                 lines.append(f"`{pair}`: LTF={ltf_rej} ADX={adx_rej}")
 
             return "\n".join(lines)
+
+
+    async def format_drop_stats(drop_stats: dict[str, dict[str, int]]) -> str:
+        """
+        Format global drop stats for Telegram display.
+
+        Args:
+            drop_stats: Dict of {pair: {stat_key: count}}
+
+        Returns:
+            Formatted string with drop stats breakdown
+        """
+        if not drop_stats:
+            return "📊 *Drop Stats*\n\n_No data available yet_"
+
+        # Calculate totals
+        total_by_stat = {}
+        total_drops = 0
+
+        for pair_stats in drop_stats.values():
+            for stat, count in pair_stats.items():
+                total_by_stat[stat] = total_by_stat.get(stat, 0) + count
+                total_drops += count
+
+        if total_drops == 0:
+            return "📊 *Drop Stats*\n\n_No rejections yet_"
+
+        # Build message
+        msg = "📊 *Drop Stats Breakdown*\n\n"
+        msg += f"*Total Rejections:* `{total_drops}`\n\n"
+
+        # Sort by count (highest first)
+        sorted_stats = sorted(total_by_stat.items(), key=lambda x: x[1], reverse=True)
+
+        # Format each stat
+        stat_labels = {
+            "off_session": "🕐 Off Session",
+            "no_fvg_match": "📭 No FVG Match",
+            "low_of_score": "📉 Low Order Flow",
+            "low_adx": "📊 Low ADX",
+            "low_volume": "📊 Low Volume",
+            "above_poc_long": "⬆️ Above POC (Long)",
+            "below_poc_short": "⬇️ Below POC (Short)",
+            "cooldown_after_sl": "⏱️ Cooldown (SL)",
+            "cooldown_after_tp": "⏱️ Cooldown (TP)",
+        }
+
+        for stat, count in sorted_stats:
+            if count == 0:
+                continue
+
+            pct = (count / total_drops) * 100
+            label = stat_labels.get(stat, stat.replace("_", " ").title())
+            msg += f"{label}: `{count}` ({pct:.1f}%)\n"
+
+        # Per-pair breakdown
+        if len(drop_stats) > 1:
+            msg += "\n*Per-Pair Breakdown:*\n"
+            for pair, stats in sorted(drop_stats.items()):
+                pair_total = sum(stats.values())
+                if pair_total > 0:
+                    msg += f"\n`{pair}`: {pair_total} drops\n"
+                    top_3 = sorted(stats.items(), key=lambda x: x[1], reverse=True)[:3]
+                    for stat, count in top_3:
+                        if count > 0:
+                            label = stat_labels.get(stat, stat.replace("_", " "))
+                            msg += f"  • {label}: {count}\n"
+
+        return msg
