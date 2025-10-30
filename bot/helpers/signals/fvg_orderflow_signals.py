@@ -133,7 +133,8 @@ def fvg_long_signal(
     idx: int,
     fvgs: List[FVG],
     vp: VolumeProfile,
-    pair: str = "UNKNOWN"
+    pair: str = "UNKNOWN",
+    drop_stats: Dict[str, int] = None
 ) -> Optional[FvgOrderFlowSignal]:
     """
     LONG signal for 15m - Returns FvgOrderFlowSignal dataclass.
@@ -148,9 +149,12 @@ def fvg_long_signal(
     Returns:
         FvgOrderFlowSignal if all conditions met, None otherwise
     """
+    if drop_stats is None:
+        drop_stats = {}
+
     bar = df.iloc[idx]
 
-    # Check for recent bullish FVG
+    # Check forrecent bullish  FVG match
     active_fvg = None
     for fvg in fvgs:
         if fvg.type == 'bullish' and not fvg.filled:
@@ -160,25 +164,30 @@ def fvg_long_signal(
                 break
 
     if not active_fvg:
+        drop_stats['no_fvg_match'] = drop_stats.get('no_fvg_match', 0) + 1
         return None
 
     # Calculate OF score
     of_score = calculate_order_flow_score(df, idx)
     if of_score < CONFIG.MIN_OF_SCORE:
+        drop_stats['low_of_score'] = drop_stats.get('low_of_score', 0) + 1
         return None
 
-    # ADX filter (relaxed for 15m)
+    # ADX filter
     if bar.adx < CONFIG.MIN_ADX:
+        drop_stats['low_adx'] = drop_stats.get('low_adx', 0) + 1
         return None
 
     # Volume filter
     if idx >= 20:
         avg_vol = df.iloc[idx-20:idx]['v'].mean()
         if bar.v < avg_vol * CONFIG.MIN_VOLUME_RATIO:
+            drop_stats['low_volume'] = drop_stats.get('low_volume', 0) + 1
             return None
 
-    # Value area filter (prefer entries below POC)
-    if bar.c > vp.poc * 1.01:  # Allow 1% above POC
+    # POC Value filter (prefer entries below POC for longs)
+    if bar.c > vp.poc * 1.01:
+        drop_stats['above_poc_long'] = drop_stats.get('above_poc_long', 0) + 1
         return None
 
     # Entry at FVG mid-point
@@ -234,7 +243,8 @@ def fvg_short_signal(
     idx: int,
     fvgs: List[FVG],
     vp: VolumeProfile,
-    pair: str = "UNKNOWN"
+    pair: str = "UNKNOWN",
+    drop_stats: Dict[str, int] = None
 ) -> Optional[FvgOrderFlowSignal]:
     """
     SHORT signal for 15m - Returns FvgOrderFlowSignal dataclass.
@@ -249,6 +259,9 @@ def fvg_short_signal(
     Returns:
         FvgOrderFlowSignal if all conditions met, None otherwise
     """
+    if drop_stats is None:
+        drop_stats = {}
+
     bar = df.iloc[idx]
 
     # Check for bearish FVG
@@ -260,25 +273,30 @@ def fvg_short_signal(
                 break
 
     if not active_fvg:
+        drop_stats['no_fvg_match'] = drop_stats.get('no_fvg_match', 0) + 1
         return None
 
     # OF score (negative for shorts)
     of_score = calculate_order_flow_score(df, idx)
     if of_score > -CONFIG.MIN_OF_SCORE:
+        drop_stats['low_of_score'] = drop_stats.get('low_of_score', 0) + 1
         return None
 
     # ADX filter
     if bar.adx < CONFIG.MIN_ADX:
+        drop_stats['low_adx'] = drop_stats.get('low_adx', 0) + 1
         return None
 
     # Volume filter
     if idx >= 20:
         avg_vol = df.iloc[idx-20:idx]['v'].mean()
         if bar.v < avg_vol * CONFIG.MIN_VOLUME_RATIO:
+            drop_stats['low_volume'] = drop_stats.get('low_volume', 0) + 1
             return None
 
-    # Value area filter (prefer entries above POC)
+    # POC Value areas filter (prefer entries above POC for shorts)
     if bar.c < vp.poc * 0.99:
+        drop_stats['below_poc_short'] = drop_stats.get('below_poc_short', 0) + 1
         return None
 
     # Entry

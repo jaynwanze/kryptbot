@@ -122,8 +122,14 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
     hist = await preload_history(symbol=pair, interval=TF, limit=LOOKBACK)
     drop_stats = {
         "off_session": 0,
-        "no_fvg_long": 0,
-        "no_fvg_short": 0,
+        "no_fvg_match": 0,          #  - No FVG detected/matched
+        "low_of_score": 0,           #  - Order Flow too weak
+        "low_adx": 0,                #  - ADX below threshold
+        "low_volume": 0,             #  - Volume too low
+        "above_poc_long": 0,         #  - LONG rejected (price above POC)
+        "below_poc_short": 0,        #  - SHORT rejected (price below POC)
+        "cooldown_after_sl": 0,      #  - Cooldown blocking signals
+        "cooldown_after_tp": 0,      #  - Cooldown blocking signals
     }
 
     logging.info(
@@ -243,6 +249,7 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                     last_sl = router.last_sl_ts.get(pair, 0.0)
                     if last_sl and (time.time() - last_sl) < COOLDOWN_SEC:
                         left_days = (COOLDOWN_SEC - (time.time() - last_sl)) / 60
+                        drop_stats['cooldown_after_sl'] += 1  # Track rejection
                         logging.info(
                             "[%s] Cool-down after SL active — %.1f days left",
                             pair,
@@ -254,6 +261,7 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                     if COOLDOWN_MINUTES_AFTER_TP > 0 and router.last_tp_ts:
                         last_tp = router.last_tp_ts.get(pair, 0.0)
                         if (time.time() - last_tp) < (COOLDOWN_MINUTES_AFTER_TP * 60):
+                            drop_stats['cooldown_after_tp'] += 1  #  Track rejection
                             left_minutes = (
                                 COOLDOWN_MINUTES_AFTER_TP * 60 - (time.time() - last_tp)
                             ) / 60
@@ -311,8 +319,8 @@ async def kline_stream(pair: str, router: RiskRouter) -> None:
                         continue
 
                     # Now pass it to signals
-                    fvg_long = fvg_long_signal(hist, i, fvgs[pair], vp, pair)
-                    fvg_short = fvg_short_signal(hist, i, fvgs[pair], vp, pair)
+                    fvg_long = fvg_long_signal(hist, i, fvgs[pair], vp, pair, drop_stats)
+                    fvg_short = fvg_short_signal(hist, i, fvgs[pair], vp, pair, drop_stats)
                     # ═══════════════════════════════════════════════════════
                     # FVG ORDER FLOW SIGNAL CHECKS
                     # ═══════════════════════════════════════════════════════
